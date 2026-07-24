@@ -109,3 +109,10 @@ export function jalaliDaysAgo(n: number): JalaliInfo {
   d.setDate(d.getDate() - n);
   return toJalali(d);
 }
+
+/** برچسب ماه از کلید «1405/04» → «تیر ۱۴۰۵» */
+export function jalaliMonthLabel(ym: string): string {
+  const [y, m] = ym.split("/").map(Number);
+  if (!y || !m || m < 1 || m > 12) return ym;
+  return `${FA_MONTHS[m - 1]} ${toFaDigits(y)}`;
+}
