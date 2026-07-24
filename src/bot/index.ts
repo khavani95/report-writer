@@ -33,10 +33,18 @@ import {
 import { transcribeAudio } from "@/ai/extract";
 import { runExtraction } from "@/services/review";
 import { loadDaySummary } from "@/services/consolidate";
-import { buildDailyExcel } from "@/services/report-excel";
+import { buildDailyExcel, buildTableExcel } from "@/services/report-excel";
+import {
+  REPORTS,
+  buildReport,
+  availableMonths,
+  reportTitle,
+  type ReportType,
+} from "@/services/reports";
 import {
   toJalali,
   jalaliDaysAgo,
+  jalaliMonthLabel,
   parseJalaliInput,
   toFaDigits,
   type JalaliInfo,
@@ -165,6 +173,18 @@ function registerHandlers(bot: Bot) {
     );
   });
 
+  // ── منوی گزارش‌ها ──────────────────────────────────
+  bot.hears(BTN.reports, async (ctx) => {
+    const project = await getActiveProject(ctx.chat.id);
+    if (!project) return await ctx.reply(MSG.selectProjectFirst);
+    const kb = new InlineKeyboard();
+    for (const r of REPORTS) kb.text(r.title, `rep:${r.key}`).row();
+    await ctx.reply(
+      `📈 گزارش‌های «${project.name}»\nکدام گزارش را می‌خواهی؟`,
+      { reply_markup: kb },
+    );
+  });
+
   // ── دکمه‌های شیشه‌ای ────────────────────────────────
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
@@ -208,6 +228,49 @@ function registerHandlers(bot: Bot) {
         await setAwaitDate(chatId);
         await ctx.reply("تاریخ شمسی را بفرست، مثل: ۱۴۰۵/۰۴/۲۸");
       }
+      return;
+    }
+
+    // ساخت و ارسال یک گزارش (نوع + ماه انتخاب شده)
+    if (data.startsWith("repm:")) {
+      const parts = data.split(":");
+      const type = parts[1] as ReportType;
+      const monthArg = parts[2];
+      const project = await getActiveProject(chatId);
+      if (!project) return await ctx.reply(MSG.selectProjectFirst);
+      const month = monthArg === "all" ? undefined : monthArg;
+      await ctx.reply("⏳ در حال ساخت گزارش…");
+      const table = await buildReport(project.id, type, month);
+      if (!table.rows.length) {
+        await ctx.reply("داده‌ای برای این گزارش وجود ندارد.");
+        return;
+      }
+      const monthLabel = month ? jalaliMonthLabel(month) : "همه‌ی ماه‌ها";
+      const buffer = await buildTableExcel(
+        reportTitle(type),
+        `${project.name} — ${monthLabel}`,
+        table,
+      );
+      const safe = project.name.replace(/[^\p{L}\p{N}]+/gu, "_");
+      await ctx.replyWithDocument(
+        new InputFile(buffer, `report-${type}-${safe}.xlsx`),
+        { caption: `📈 ${reportTitle(type)}\n${project.name} — ${monthLabel}` },
+      );
+      return;
+    }
+
+    // انتخاب ماه برای یک گزارش
+    if (data.startsWith("rep:")) {
+      const type = data.slice(4) as ReportType;
+      const project = await getActiveProject(chatId);
+      if (!project) return await ctx.reply(MSG.selectProjectFirst);
+      const months = await availableMonths(project.id);
+      const kb = new InlineKeyboard();
+      for (const m of months) kb.text(m.label, `repm:${type}:${m.key}`).row();
+      kb.text("📅 همه‌ی ماه‌ها", `repm:${type}:all`);
+      await ctx.reply(`📈 ${reportTitle(type)}\nکدام ماه؟`, {
+        reply_markup: kb,
+      });
       return;
     }
 

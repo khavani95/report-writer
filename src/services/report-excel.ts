@@ -1,7 +1,41 @@
 import ExcelJS from "exceljs";
 import type { DaySummary } from "./consolidate";
+import type { ReportTable } from "./reports";
 import { humanDuration } from "./attendance-calc";
 import type { WorkDay, Project } from "@/db/schema";
+
+/** ساخت اکسل از یک جدول گزارش دوره‌ای */
+export async function buildTableExcel(
+  title: string,
+  subtitle: string,
+  table: ReportTable,
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "روزنگار";
+  wb.created = new Date();
+  const ws = wb.addWorksheet("گزارش", { views: [{ rightToLeft: true }] });
+
+  const span = Math.max(table.columns.length, 1);
+  const r1 = ws.addRow([title]);
+  ws.mergeCells(r1.number, 1, r1.number, span);
+  styleTitle(r1.getCell(1), 14);
+
+  const sub = subtitle + (table.note ? `    |    ${table.note}` : "");
+  const r2 = ws.addRow([sub]);
+  ws.mergeCells(r2.number, 1, r2.number, span);
+  styleTitle(r2.getCell(1), 11, false);
+  ws.addRow([]);
+
+  addHeaderRow(ws, table.columns);
+  for (const row of table.rows) ws.addRow(row as (string | number)[]);
+  autoWidth(
+    ws,
+    table.columns.map(() => 20),
+  );
+
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
+}
 
 const HEADER_FILL = "FF1F4E78";
 const SUBHEAD_FILL = "FFDDEBF7";

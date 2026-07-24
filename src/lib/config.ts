@@ -36,6 +36,11 @@ export const config = {
     },
   },
   publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
+  get baseUrl() {
+    if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL;
+    if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+    return "";
+  },
 };
 
 /**

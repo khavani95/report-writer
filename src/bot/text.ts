@@ -11,6 +11,7 @@ export const BTN = {
   endDay: "⏹️ پایان روز",
   todayReport: "📊 گزارش امروز",
   workers: "👷 نیروها",
+  reports: "📈 گزارش‌ها",
   back: "🔙 منوی اصلی",
 } as const;
 
@@ -34,6 +35,7 @@ export function projectKeyboard() {
     .text(BTN.todayReport)
     .text(BTN.workers)
     .row()
+    .text(BTN.reports)
     .text(BTN.back)
     .resized()
     .persistent();
