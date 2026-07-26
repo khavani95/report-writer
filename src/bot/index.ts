@@ -41,6 +41,7 @@ import {
   reportTitle,
   type ReportType,
 } from "@/services/reports";
+import { buildMonthlyZip } from "@/services/monthly-zip";
 import {
   toJalali,
   jalaliDaysAgo,
@@ -179,6 +180,7 @@ function registerHandlers(bot: Bot) {
     if (!project) return await ctx.reply(MSG.selectProjectFirst);
     const kb = new InlineKeyboard();
     for (const r of REPORTS) kb.text(r.title, `rep:${r.key}`).row();
+    kb.text("🗂️ بسته‌ی گزارش‌های روزانه (zip)", "rep:zip");
     await ctx.reply(
       `📈 گزارش‌های «${project.name}»\nکدام گزارش را می‌خواهی؟`,
       { reply_markup: kb },
@@ -234,43 +236,73 @@ function registerHandlers(bot: Bot) {
     // ساخت و ارسال یک گزارش (نوع + ماه انتخاب شده)
     if (data.startsWith("repm:")) {
       const parts = data.split(":");
-      const type = parts[1] as ReportType;
+      const type = parts[1];
       const monthArg = parts[2];
       const project = await getActiveProject(chatId);
       if (!project) return await ctx.reply(MSG.selectProjectFirst);
       const month = monthArg === "all" ? undefined : monthArg;
+
+      // بسته‌ی زیپِ گزارش‌های روزانه
+      if (type === "zip") {
+        await ctx.reply("⏳ در حال ساخت بسته‌ی گزارش‌های روزانه…");
+        const res = await buildMonthlyZip(project, month);
+        if (!res) {
+          await ctx.reply("برای این بازه گزارش روزانه‌ای وجود ندارد.");
+          return;
+        }
+        const label = month ? jalaliMonthLabel(month) : "همه‌ی ماه‌ها";
+        const note = res.skipped
+          ? `\n⚠️ ${toFaDigits(res.skipped)} روز به‌دلیل حجم زیاد نیامد؛ ماه‌به‌ماه بگیر.`
+          : "";
+        await ctx.replyWithDocument(new InputFile(res.buffer, res.fileName), {
+          caption:
+            `🗂️ بسته‌ی گزارش‌های روزانه\n${project.name} — ${label}\n` +
+            `تعداد روز: ${toFaDigits(res.dayCount)}${note}`,
+        });
+        return;
+      }
+
       await ctx.reply("⏳ در حال ساخت گزارش…");
-      const table = await buildReport(project.id, type, month);
+      const reportType = type as ReportType;
+      const table = await buildReport(project.id, reportType, month);
       if (!table.rows.length) {
         await ctx.reply("داده‌ای برای این گزارش وجود ندارد.");
         return;
       }
       const monthLabel = month ? jalaliMonthLabel(month) : "همه‌ی ماه‌ها";
       const buffer = await buildTableExcel(
-        reportTitle(type),
+        reportTitle(reportType),
         `${project.name} — ${monthLabel}`,
         table,
       );
       const safe = project.name.replace(/[^\p{L}\p{N}]+/gu, "_");
       await ctx.replyWithDocument(
-        new InputFile(buffer, `report-${type}-${safe}.xlsx`),
-        { caption: `📈 ${reportTitle(type)}\n${project.name} — ${monthLabel}` },
+        new InputFile(buffer, `report-${reportType}-${safe}.xlsx`),
+        {
+          caption: `📈 ${reportTitle(reportType)}\n${project.name} — ${monthLabel}`,
+        },
       );
       return;
     }
 
     // انتخاب ماه برای یک گزارش
     if (data.startsWith("rep:")) {
-      const type = data.slice(4) as ReportType;
+      const type = data.slice(4);
       const project = await getActiveProject(chatId);
       if (!project) return await ctx.reply(MSG.selectProjectFirst);
       const months = await availableMonths(project.id);
+      if (!months.length) {
+        await ctx.reply("هنوز داده‌ای برای گزارش‌گیری وجود ندارد.");
+        return;
+      }
+      const title =
+        type === "zip"
+          ? "🗂️ بسته‌ی گزارش‌های روزانه"
+          : `📈 ${reportTitle(type as ReportType)}`;
       const kb = new InlineKeyboard();
       for (const m of months) kb.text(m.label, `repm:${type}:${m.key}`).row();
       kb.text("📅 همه‌ی ماه‌ها", `repm:${type}:all`);
-      await ctx.reply(`📈 ${reportTitle(type)}\nکدام ماه؟`, {
-        reply_markup: kb,
-      });
+      await ctx.reply(`${title}\nکدام ماه؟`, { reply_markup: kb });
       return;
     }
 
