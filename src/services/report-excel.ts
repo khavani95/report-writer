@@ -40,9 +40,14 @@ export async function buildTableExcel(
 const HEADER_FILL = "FF1F4E78";
 const SUBHEAD_FILL = "FFDDEBF7";
 
+/** تعداد ستون‌های شبکه‌ی گزارش روزانه */
+const COLS = 9;
+const COL_WIDTHS = [5, 17, 13, 12, 9, 9, 13, 13, 13];
+
 /**
  * ساخت فایل اکسل گزارش روزانه‌ی استاندارد کارگاه.
- * چهار بخش: کارکرد نیرو، فعالیت‌ها، موانع، دوباره‌کاری.
+ * همه‌چیز در یک برگه و به‌صورت بخش‌های پشت‌سرهم:
+ * مشخصات پروژه → کارکرد نیروها → فعالیت‌ها → موانع → دوباره‌کاری → امضاها.
  */
 export async function buildDailyExcel(
   project: Project,
@@ -53,106 +58,340 @@ export async function buildDailyExcel(
   wb.creator = "روزنگار";
   wb.created = new Date();
 
-  // ── برگه‌ی کارکرد نیرو ─────────────────────────────
-  const ws = wb.addWorksheet("کارکرد نیرو", {
+  const ws = wb.addWorksheet("گزارش روزانه", {
     views: [{ rightToLeft: true }],
+    pageSetup: {
+      orientation: "landscape",
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: {
+        left: 0.4,
+        right: 0.4,
+        top: 0.5,
+        bottom: 0.5,
+        header: 0.2,
+        footer: 0.2,
+      },
+    },
+  });
+  COL_WIDTHS.forEach((w, i) => {
+    ws.getColumn(i + 1).width = w;
   });
 
-  titleBlock(ws, project, day, 8);
+  const revTag =
+    day.revision > 0 ? ` — rev${String(day.revision).padStart(2, "0")}` : "";
 
-  const head = [
-    "ردیف",
-    "نام نیرو",
-    "تخصص",
-    "نوع",
-    "ورود",
-    "خروج",
-    "کارکرد",
-    "اضافه‌کاری",
-  ];
-  addHeaderRow(ws, head);
+  // ── سربرگ ─────────────────────────────────────────
+  const t = ws.addRow([]);
+  t.getCell(1).value = `گزارش روزانه‌ی کارگاه${revTag}`;
+  ws.mergeCells(t.number, 1, t.number, COLS);
+  styleTitle(t.getCell(1), 16);
+  t.height = 28;
 
-  summary.attendance.forEach((a, i) => {
-    ws.addRow([
-      i + 1,
-      a.name,
-      a.trade ?? "-",
-      a.employmentType ?? "-",
-      a.entry ?? "-",
-      a.exit ?? "-",
-      a.dayFraction >= 1 ? "۱ روز" : humanDuration(a.workedMinutes),
-      a.overtimeMinutes ? humanDuration(a.overtimeMinutes) : "-",
-    ]);
-  });
-  ws.addRow([]);
-  ws.addRow(["", "جمع نفرات:", summary.workerCount]);
-  autoWidth(ws, [6, 22, 14, 12, 9, 9, 16, 14]);
+  // ── ۱) مشخصات پروژه ───────────────────────────────
+  sectionHeader(ws, "مشخصات پروژه");
+  const totalMinutes = summary.attendance.reduce(
+    (s, a) => s + a.workedMinutes,
+    0,
+  );
+  const totalOvertime = summary.attendance.reduce(
+    (s, a) => s + a.overtimeMinutes,
+    0,
+  );
+  const personDays = summary.attendance.reduce((s, a) => s + a.dayFraction, 0);
 
-  // ── برگه‌ی فعالیت‌ها ───────────────────────────────
-  const wsAct = wb.addWorksheet("فعالیت‌ها", {
-    views: [{ rightToLeft: true }],
-  });
-  titleBlock(wsAct, project, day, 5);
-  addHeaderRow(wsAct, ["جبهه‌ی کاری", "نوع فعالیت", "زمان", "شرح", "نیروها"]);
-  for (const a of summary.activities) {
-    const time = a.isFullDay
-      ? "تمام‌روز"
-      : a.startTime && a.endTime
-        ? `${a.startTime}–${a.endTime}`
-        : "-";
-    wsAct.addRow([
-      a.workFront ?? "-",
-      a.activityType ?? "-",
-      time,
-      a.description,
-      a.workers.join("، ") || "-",
-    ]);
+  infoRow(ws, "نام پروژه", project.name, "شماره گزارش", day.reportNo ?? "-");
+  infoRow(
+    ws,
+    "تاریخ",
+    day.dateLabel,
+    "نسخه",
+    day.revision > 0 ? `rev${String(day.revision).padStart(2, "0")}` : "اولیه",
+  );
+  infoRow(
+    ws,
+    "تعداد نفرات",
+    summary.workerCount,
+    "جمع نفر-روز",
+    Math.round(personDays * 100) / 100,
+  );
+  infoRow(
+    ws,
+    "جمع کارکرد",
+    humanDuration(totalMinutes),
+    "جمع اضافه‌کاری",
+    totalOvertime ? humanDuration(totalOvertime) : "-",
+  );
+  spacer(ws);
+
+  // ── ۲) کارکرد نیروی انسانی ────────────────────────
+  sectionHeader(ws, "۱) کارکرد نیروی انسانی");
+  const attSpans = [1, 2, 1, 1, 1, 1, 1, 1];
+  gridHeader(
+    ws,
+    ["ردیف", "نام نیرو", "تخصص", "نوع همکاری", "ورود", "خروج", "کارکرد", "اضافه‌کاری"],
+    attSpans,
+  );
+  if (summary.attendance.length) {
+    summary.attendance.forEach((a, i) => {
+      gridRow(
+        ws,
+        [
+          i + 1,
+          a.name,
+          a.trade ?? "-",
+          a.employmentType ?? "-",
+          a.entry ?? "-",
+          a.exit ?? "-",
+          a.dayFraction >= 1 ? "۱ روز کامل" : humanDuration(a.workedMinutes),
+          a.overtimeMinutes ? humanDuration(a.overtimeMinutes) : "-",
+        ],
+        attSpans,
+      );
+    });
+    const sum = gridRow(
+      ws,
+      [
+        "",
+        `جمع: ${summary.workerCount} نفر`,
+        "",
+        "",
+        "",
+        "",
+        humanDuration(totalMinutes),
+        totalOvertime ? humanDuration(totalOvertime) : "-",
+      ],
+      attSpans,
+    );
+    boldRow(sum);
+  } else {
+    emptyRow(ws, "نیرویی ثبت نشده است.");
   }
-  autoWidth(wsAct, [20, 18, 14, 40, 28]);
+  spacer(ws);
 
-  // ── برگه‌ی موانع و مشکلات ──────────────────────────
-  const wsIss = wb.addWorksheet("موانع و مشکلات", {
-    views: [{ rightToLeft: true }],
-  });
-  titleBlock(wsIss, project, day, 3);
-  addHeaderRow(wsIss, ["نوع", "شرح", "اثر/علت"]);
-  for (const i of summary.issues) {
-    wsIss.addRow([i.type, i.description, i.impact ?? "-"]);
+  // ── ۳) شرح عملیات اجرایی ──────────────────────────
+  sectionHeader(ws, "۲) شرح عملیات اجرایی و نیروهای درگیر");
+  const actSpans = [1, 2, 1, 1, 2, 2];
+  gridHeader(
+    ws,
+    ["ردیف", "جبهه‌ی کاری", "نوع فعالیت", "زمان", "شرح فعالیت", "نیروهای درگیر"],
+    actSpans,
+  );
+  if (summary.activities.length) {
+    summary.activities.forEach((a, i) => {
+      const time = a.isFullDay
+        ? "تمام‌روز"
+        : a.startTime && a.endTime
+          ? `${a.startTime}–${a.endTime}`
+          : "-";
+      gridRow(
+        ws,
+        [
+          i + 1,
+          a.workFront ?? "-",
+          a.activityType ?? "-",
+          time,
+          a.description,
+          a.workers.join("، ") || "-",
+        ],
+        actSpans,
+      );
+    });
+  } else {
+    emptyRow(ws, "فعالیتی ثبت نشده است.");
   }
-  autoWidth(wsIss, [14, 50, 30]);
+  spacer(ws);
 
-  // ── برگه‌ی دوباره‌کاری ─────────────────────────────
-  const wsRw = wb.addWorksheet("دوباره‌کاری", {
-    views: [{ rightToLeft: true }],
-  });
-  titleBlock(wsRw, project, day, 4);
-  addHeaderRow(wsRw, ["محل", "مقدار", "علت", "شرح"]);
-  for (const r of summary.reworks) {
-    wsRw.addRow([r.workFront ?? "-", r.amount ?? "-", r.cause ?? "-", r.description]);
+  // ── ۴) موانع و مشکلات ─────────────────────────────
+  sectionHeader(ws, "۳) موانع، مشکلات و تأخیرات");
+  const issSpans = [1, 2, 3, 3];
+  gridHeader(ws, ["ردیف", "نوع", "شرح", "اثر / علت"], issSpans);
+  if (summary.issues.length) {
+    summary.issues.forEach((i, idx) => {
+      gridRow(ws, [idx + 1, i.type, i.description, i.impact ?? "-"], issSpans);
+    });
+  } else {
+    emptyRow(ws, "موردی گزارش نشده است.");
   }
-  autoWidth(wsRw, [22, 16, 30, 45]);
+  spacer(ws);
+
+  // ── ۵) دوباره‌کاری ────────────────────────────────
+  sectionHeader(ws, "۴) دوباره‌کاری‌ها");
+  const rwSpans = [1, 2, 1, 2, 3];
+  gridHeader(ws, ["ردیف", "محل", "مقدار", "علت", "شرح"], rwSpans);
+  if (summary.reworks.length) {
+    summary.reworks.forEach((r, idx) => {
+      gridRow(
+        ws,
+        [
+          idx + 1,
+          r.workFront ?? "-",
+          r.amount ?? "-",
+          r.cause ?? "-",
+          r.description,
+        ],
+        rwSpans,
+      );
+    });
+  } else {
+    emptyRow(ws, "موردی گزارش نشده است.");
+  }
+  spacer(ws);
+
+  // ── ۶) امضاها ─────────────────────────────────────
+  signatureBlock(ws);
 
   const arrayBuffer = await wb.xlsx.writeBuffer();
   return Buffer.from(arrayBuffer);
 }
 
-function titleBlock(
-  ws: ExcelJS.Worksheet,
-  project: Project,
-  day: WorkDay,
-  span: number,
-) {
-  const r1 = ws.addRow([`گزارش روزانه‌ی ${project.name}`]);
-  ws.mergeCells(r1.number, 1, r1.number, span);
-  styleTitle(r1.getCell(1), 14);
+/** عنوان یک بخش (نوار رنگی تمام‌عرض) */
+function sectionHeader(ws: ExcelJS.Worksheet, text: string) {
+  const row = ws.addRow([]);
+  row.getCell(1).value = text;
+  ws.mergeCells(row.number, 1, row.number, COLS);
+  const c = row.getCell(1);
+  c.font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+  c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: HEADER_FILL } };
+  c.alignment = { horizontal: "right", vertical: "middle", indent: 1 };
+  c.border = thinBorder();
+  row.height = 22;
+}
 
-  const rev = day.revision > 0 ? `-rev${String(day.revision).padStart(2, "0")}` : "";
-  const r2 = ws.addRow([
-    `شماره گزارش: ${day.reportNo ?? "-"}${rev}    |    تاریخ: ${day.dateLabel}`,
-  ]);
-  ws.mergeCells(r2.number, 1, r2.number, span);
-  styleTitle(r2.getCell(1), 11, false);
-  ws.addRow([]);
+/** یک ردیف «برچسب: مقدار» دوتایی در بخش مشخصات */
+function infoRow(
+  ws: ExcelJS.Worksheet,
+  l1: string,
+  v1: string | number,
+  l2: string,
+  v2: string | number,
+) {
+  const row = gridRow(ws, [l1, v1, l2, v2], [2, 3, 2, 2]);
+  for (const col of [1, 6]) {
+    const cell = row.getCell(col);
+    cell.font = { bold: true };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: SUBHEAD_FILL },
+    };
+  }
+}
+
+/** ردیف عنوان ستون‌های یک جدول */
+function gridHeader(
+  ws: ExcelJS.Worksheet,
+  labels: string[],
+  spans: number[],
+) {
+  const row = gridRow(ws, labels, spans);
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: HEADER_FILL },
+    };
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  });
+  row.height = 20;
+}
+
+/** یک ردیف داده روی شبکه‌ی ستون‌ها (با ادغام بر اساس spans) */
+function gridRow(
+  ws: ExcelJS.Worksheet,
+  values: Array<string | number>,
+  spans: number[],
+): ExcelJS.Row {
+  const row = ws.addRow([]);
+  let col = 1;
+  values.forEach((v, i) => {
+    const span = spans[i] ?? 1;
+    row.getCell(col).value = v;
+    if (span > 1) {
+      ws.mergeCells(row.number, col, row.number, col + span - 1);
+    }
+    col += span;
+  });
+  for (let c = 1; c <= COLS; c++) {
+    const cell = row.getCell(c);
+    cell.border = thinBorder();
+    if (!cell.alignment) {
+      cell.alignment = {
+        vertical: "middle",
+        horizontal: "right",
+        wrapText: true,
+      };
+    }
+  }
+  return row;
+}
+
+function boldRow(row: ExcelJS.Row) {
+  row.eachCell({ includeEmpty: true }, (cell) => {
+    cell.font = { bold: true };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: SUBHEAD_FILL },
+    };
+  });
+}
+
+/** ردیف «موردی ثبت نشده» */
+function emptyRow(ws: ExcelJS.Worksheet, text: string) {
+  const row = ws.addRow([]);
+  row.getCell(1).value = text;
+  ws.mergeCells(row.number, 1, row.number, COLS);
+  const c = row.getCell(1);
+  c.alignment = { horizontal: "center", vertical: "middle" };
+  c.font = { italic: true, color: { argb: "FF808080" } };
+  for (let i = 1; i <= COLS; i++) row.getCell(i).border = thinBorder();
+}
+
+function spacer(ws: ExcelJS.Worksheet) {
+  ws.addRow([]).height = 8;
+}
+
+/** بخش امضای کارفرما و پیمانکار */
+function signatureBlock(ws: ExcelJS.Worksheet) {
+  const head = ws.addRow([]);
+  head.getCell(1).value = "امضای کارفرما";
+  ws.mergeCells(head.number, 1, head.number, 4);
+  head.getCell(6).value = "امضای پیمانکار";
+  ws.mergeCells(head.number, 6, head.number, COLS);
+  for (const col of [1, 6]) {
+    const c = head.getCell(col);
+    c.font = { bold: true, color: { argb: "FF1F4E78" } };
+    c.alignment = { horizontal: "center", vertical: "middle" };
+    c.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: SUBHEAD_FILL },
+    };
+    c.border = thinBorder();
+  }
+  head.height = 20;
+
+  const box = ws.addRow([]);
+  ws.mergeCells(box.number, 1, box.number, 4);
+  ws.mergeCells(box.number, 6, box.number, COLS);
+  box.getCell(1).border = thinBorder();
+  box.getCell(6).border = thinBorder();
+  box.height = 60;
+
+  const name = ws.addRow([]);
+  name.getCell(1).value = "نام و نام‌خانوادگی / تاریخ:";
+  ws.mergeCells(name.number, 1, name.number, 4);
+  name.getCell(6).value = "نام و نام‌خانوادگی / تاریخ:";
+  ws.mergeCells(name.number, 6, name.number, COLS);
+  for (const col of [1, 6]) {
+    const c = name.getCell(col);
+    c.alignment = { horizontal: "right", vertical: "middle", indent: 1 };
+    c.border = thinBorder();
+  }
+  name.height = 22;
 }
 
 function styleTitle(cell: ExcelJS.Cell, size: number, bold = true) {

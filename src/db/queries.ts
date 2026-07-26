@@ -172,6 +172,23 @@ export async function getWorkDayById(id: number): Promise<WorkDay | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * روزهای کاری یک پروژه؛ در صورت دادن ماه («1405/04») فقط همان ماه.
+ * برای خروجی زیپِ گزارش‌های روزانه استفاده می‌شود.
+ */
+export async function listWorkDays(
+  projectId: number,
+  month?: string,
+): Promise<WorkDay[]> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(workDays)
+    .where(eq(workDays.projectId, projectId))
+    .orderBy(workDays.jalaliDate);
+  return month ? rows.filter((d) => d.jalaliDate.startsWith(month)) : rows;
+}
+
 /** تغییر وضعیت روز (open | review | closed) */
 export async function setDayStatus(
   workDayId: number,
