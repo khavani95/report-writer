@@ -44,8 +44,9 @@ export async function buildMonthlyTimesheet(
   const holidayMap = await getMonthHolidays(month);
   const days: JalaliDayInfo[] = baseDays.map((d) => ({
     ...d,
-    // عنوان از سرویس تقویم؛ جمعه‌ها عنوان ندارند و با isFriday مدیریت می‌شوند
-    holiday: holidayMap.get(d.key)?.title ?? d.holiday ?? null,
+    // پاسخ سرویس تقویم مرجع است (fallbackِ فهرست داخلی قبلاً در همان‌جا اعمال شده).
+    // اینجا دوباره d.holiday را جایگزین نمی‌کنیم تا «تعطیل نبودنِ» یک روز بازنویسی نشود.
+    holiday: holidayMap.get(d.key)?.title ?? null,
   }));
 
   const db = getDb();
