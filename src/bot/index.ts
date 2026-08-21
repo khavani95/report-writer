@@ -42,6 +42,7 @@ import {
   type ReportType,
 } from "@/services/reports";
 import { buildMonthlyZip } from "@/services/monthly-zip";
+import { buildMonthlyTimesheet } from "@/services/timesheet";
 import {
   toJalali,
   jalaliDaysAgo,
@@ -180,6 +181,7 @@ function registerHandlers(bot: Bot) {
     if (!project) return await ctx.reply(MSG.selectProjectFirst);
     const kb = new InlineKeyboard();
     for (const r of REPORTS) kb.text(r.title, `rep:${r.key}`).row();
+    kb.text("📅 دیتاشیت کارکرد ماهانه", "rep:timesheet").row();
     kb.text("🗂️ بسته‌ی گزارش‌های روزانه (zip)", "rep:zip");
     await ctx.reply(
       `📈 گزارش‌های «${project.name}»\nکدام گزارش را می‌خواهی؟`,
@@ -242,6 +244,29 @@ function registerHandlers(bot: Bot) {
       if (!project) return await ctx.reply(MSG.selectProjectFirst);
       const month = monthArg === "all" ? undefined : monthArg;
 
+      // دیتاشیت کارکرد ماهانه
+      if (type === "timesheet") {
+        if (!month) {
+          await ctx.reply("برای دیتاشیت باید یک ماه مشخص انتخاب کنی.");
+          return;
+        }
+        await ctx.reply("⏳ در حال ساخت دیتاشیت کارکرد ماهانه…");
+        const sheet = await buildMonthlyTimesheet(project, month);
+        if (!sheet) {
+          await ctx.reply("برای این ماه کارکردی ثبت نشده است.");
+          return;
+        }
+        await ctx.replyWithDocument(
+          new InputFile(sheet.buffer, sheet.fileName),
+          {
+            caption:
+              `📅 دیتاشیت کارکرد ماهانه\n${project.name} — ${jalaliMonthLabel(month)}\n` +
+              `تعداد نیروها: ${toFaDigits(sheet.workerCount)}`,
+          },
+        );
+        return;
+      }
+
       // بسته‌ی زیپِ گزارش‌های روزانه
       if (type === "zip") {
         await ctx.reply("⏳ در حال ساخت بسته‌ی گزارش‌های روزانه…");
@@ -298,10 +323,13 @@ function registerHandlers(bot: Bot) {
       const title =
         type === "zip"
           ? "🗂️ بسته‌ی گزارش‌های روزانه"
-          : `📈 ${reportTitle(type as ReportType)}`;
+          : type === "timesheet"
+            ? "📅 دیتاشیت کارکرد ماهانه"
+            : `📈 ${reportTitle(type as ReportType)}`;
       const kb = new InlineKeyboard();
       for (const m of months) kb.text(m.label, `repm:${type}:${m.key}`).row();
-      kb.text("📅 همه‌ی ماه‌ها", `repm:${type}:all`);
+      // دیتاشیت ذاتاً ماهانه است و گزینه‌ی «همه‌ی ماه‌ها» ندارد
+      if (type !== "timesheet") kb.text("📅 همه‌ی ماه‌ها", `repm:${type}:all`);
       await ctx.reply(`${title}\nکدام ماه؟`, { reply_markup: kb });
       return;
     }
