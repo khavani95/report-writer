@@ -35,6 +35,11 @@ export const config = {
       return required("DATABASE_URL");
     },
   },
+  /**
+   * سرویس تعطیلات رسمی تقویم ایران (شمسی).
+   * قالب درخواست: {base}/{سال}/{ماه}/{روز}
+   */
+  holidayApiUrl: process.env.HOLIDAY_API_URL || "https://holidayapi.ir/jalali",
   publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
   get baseUrl() {
     if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL;

@@ -203,6 +203,17 @@ export const conversationState = pgTable("conversation_state", {
 });
 
 /**
+ * کشِ تعطیلات رسمی تقویم ایران (دریافت‌شده از سرویس بیرونی).
+ * چون تعطیلاتِ گذشته تغییر نمی‌کنند، یک‌بار دریافت و برای همیشه نگهداری می‌شود.
+ */
+export const holidays = pgTable("holidays", {
+  jalaliDate: text("jalali_date").primaryKey(), // 1405/04/30
+  isHoliday: boolean("is_holiday").notNull().default(false),
+  title: text("title"),
+  fetchedAt: timestamp("fetched_at").notNull().defaultNow(),
+});
+
+/**
  * موانع، مشکلات و تأخیرات.
  */
 export const issues = pgTable(
