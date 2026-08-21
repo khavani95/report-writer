@@ -236,7 +236,7 @@ function addGridSheet(
           fgColor: { argb: FRIDAY_FILL },
         };
       } else {
-        cell.value = "-";
+        cell.value = null; // بدون ورود/خروج → خالی
       }
       cell.font = { size: 8 };
       cell.alignment = {
@@ -455,8 +455,9 @@ function addWorkerSheet(
       d.key,
       d.weekday,
       status,
-      rec?.entry ?? "-",
-      rec?.exit ?? "-",
+      // روزهای بدون ورود/خروج خالی می‌مانند (به‌جای خط تیره)
+      rec?.entry ?? null,
+      rec?.exit ?? null,
       rec?.workedMinutes ? toHours(rec.workedMinutes) : null,
       rec?.dayFraction ? round2(rec.dayFraction) : null,
       rec?.overtimeMinutes ? toHours(rec.overtimeMinutes) : null,
