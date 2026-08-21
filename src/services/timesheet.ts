@@ -42,12 +42,11 @@ export async function buildMonthlyTimesheet(
 
   // تعطیلات رسمی از سرویس تقویم ایران (با کش و fallback داخلی)
   const holidayMap = await getMonthHolidays(month);
-  const days: JalaliDayInfo[] = baseDays.map((d) => {
-    const h = holidayMap.get(d.key);
-    // عنوان‌دار = تعطیل رسمی؛ تعطیلِ بی‌عنوان معمولاً همان جمعه است
-    const title = h?.title ?? d.holiday;
-    return { ...d, holiday: h?.isHoliday && title ? title : (d.holiday ?? null) };
-  });
+  const days: JalaliDayInfo[] = baseDays.map((d) => ({
+    ...d,
+    // عنوان از سرویس تقویم؛ جمعه‌ها عنوان ندارند و با isFriday مدیریت می‌شوند
+    holiday: holidayMap.get(d.key)?.title ?? d.holiday ?? null,
+  }));
 
   const db = getDb();
   const rows = await db
@@ -453,7 +452,7 @@ function addWorkerSheet(
 
   ws.addRow([]);
   const legend = ws.addRow([
-    "راهنما: «بدون ثبت» یعنی برای آن روز گزارشی ثبت نشده. تعطیلات مذهبیِ قمری خودکار علامت‌گذاری نمی‌شوند.",
+    "راهنما: «بدون ثبت» یعنی برای آن روز گزارشی ثبت نشده. تعطیلات رسمی از تقویم رسمی ایران گرفته می‌شود.",
   ]);
   ws.mergeCells(legend.number, 1, legend.number, COLS);
   legend.getCell(1).font = { italic: true, size: 9, color: { argb: "FF808080" } };

@@ -36,10 +36,11 @@ export const config = {
     },
   },
   /**
-   * سرویس تعطیلات رسمی تقویم ایران (شمسی).
-   * قالب درخواست: {base}/{سال}/{ماه}/{روز}
+   * سرویس تقویم شمسی/تعطیلات رسمی ایران.
+   * قالب درخواست: {base}?year={سال}&month={ماه}  → کل ماه در یک درخواست
    */
-  holidayApiUrl: process.env.HOLIDAY_API_URL || "https://holidayapi.ir/jalali",
+  holidayApiUrl:
+    process.env.HOLIDAY_API_URL || "https://pnldev.com/api/calender",
   publicBaseUrl: process.env.PUBLIC_BASE_URL || "",
   get baseUrl() {
     if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL;
