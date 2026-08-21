@@ -3,7 +3,6 @@ import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { attendance, workDays, workers } from "@/db/schema";
 import { HEADER_FILL, SUBHEAD_FILL, thinBorder, applyRtl } from "./report-excel";
-import { humanDuration } from "./attendance-calc";
 import { getMonthHolidays } from "./holiday-service";
 import { monthDays, jalaliMonthLabel, type JalaliDayInfo } from "@/lib/jalali";
 import type { Project } from "@/db/schema";
@@ -137,16 +136,20 @@ function addGridSheet(
 
   const NAME_COL = 1;
   const FIRST_DAY_COL = 2;
-  const totalCols = FIRST_DAY_COL + days.length + 1; // + ستون جمع
+  // دو ستون جمعِ عددی در انتها: کارکرد (ساعت) و نفر-روز
+  const SUM_HOURS = FIRST_DAY_COL + days.length;
+  const SUM_DAYS = SUM_HOURS + 1;
+  const totalCols = SUM_DAYS;
 
   ws.getColumn(NAME_COL).width = 18;
   days.forEach((_, i) => {
     ws.getColumn(FIRST_DAY_COL + i).width = 7;
   });
-  ws.getColumn(FIRST_DAY_COL + days.length).width = 12;
+  ws.getColumn(SUM_HOURS).width = 12;
+  ws.getColumn(SUM_DAYS).width = 10;
 
-  title(ws, `جدول کارکرد ماهانه — ${monthLabel}`, totalCols - 1, 14);
-  title(ws, `پروژه: ${project.name}`, totalCols - 1, 11, false);
+  title(ws, `جدول کارکرد ماهانه — ${monthLabel}`, totalCols, 14);
+  title(ws, `پروژه: ${project.name}`, totalCols, 11, false);
   ws.addRow([]);
 
   // سطر شماره‌ی روز
@@ -155,7 +158,8 @@ function addGridSheet(
   days.forEach((d, i) => {
     rDay.getCell(FIRST_DAY_COL + i).value = d.day;
   });
-  rDay.getCell(FIRST_DAY_COL + days.length).value = "جمع";
+  rDay.getCell(SUM_HOURS).value = "کارکرد";
+  rDay.getCell(SUM_DAYS).value = "نفر-روز";
 
   // سطر روز هفته
   const rDow = ws.addRow([]);
@@ -163,11 +167,12 @@ function addGridSheet(
   days.forEach((d, i) => {
     rDow.getCell(FIRST_DAY_COL + i).value = shortWeekday(d.weekday);
   });
-  rDow.getCell(FIRST_DAY_COL + days.length).value = "کارکرد";
+  rDow.getCell(SUM_HOURS).value = "(ساعت)";
+  rDow.getCell(SUM_DAYS).value = "(روز)";
 
   for (const row of [rDay, rDow]) {
     row.height = 18;
-    for (let c = 1; c < totalCols; c++) {
+    for (let c = 1; c <= totalCols; c++) {
       const cell = row.getCell(c);
       cell.font = { bold: true, size: 9, color: { argb: "FFFFFFFF" } };
       cell.fill = {
@@ -242,12 +247,20 @@ function addGridSheet(
       cell.border = thinBorder();
     });
 
+    // جمع‌های عددی (قابل جمع‌زدن با AutoSum)
     const t = totals(w);
-    const sumCell = row.getCell(FIRST_DAY_COL + days.length);
-    sumCell.value = humanDuration(t.minutes);
-    sumCell.font = { bold: true, size: 9 };
-    sumCell.alignment = { horizontal: "center", vertical: "middle" };
-    sumCell.border = thinBorder();
+    const cells: Array<[number, number]> = [
+      [SUM_HOURS, toHours(t.minutes)],
+      [SUM_DAYS, round2(t.personDays)],
+    ];
+    for (const [col, value] of cells) {
+      const cell = row.getCell(col);
+      cell.value = value;
+      cell.numFmt = "0.##";
+      cell.font = { bold: true, size: 9 };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      cell.border = thinBorder();
+    }
     row.getCell(NAME_COL).border = thinBorder();
   }
 
@@ -310,13 +323,17 @@ function addSummarySheet(
       "نام نیرو",
       "تخصص",
       "نوع همکاری",
-      "روزهای کارکرد",
+      "روزهای حضور",
       "نفر-روز",
-      "جمع کارکرد",
-      "اضافه‌کاری",
+      "جمع کارکرد (ساعت)",
+      "اضافه‌کاری (ساعت)",
     ],
     COLS,
   );
+
+  // ستون‌های عددی برای جمع‌زدن با AutoSum
+  const NUM_COLS = [5, 6, 7, 8];
+  const firstRow = ws.rowCount + 1;
 
   list.forEach((w, i) => {
     const t = totals(w);
@@ -326,11 +343,12 @@ function addSummarySheet(
       w.trade ?? "-",
       w.employmentType ?? "-",
       t.presentDays,
-      Math.round(t.personDays * 100) / 100,
-      humanDuration(t.minutes),
-      t.overtime ? humanDuration(t.overtime) : "-",
+      round2(t.personDays),
+      toHours(t.minutes),
+      toHours(t.overtime),
     ]);
     borderRow(row, COLS);
+    numericCells(row, NUM_COLS);
   });
 
   const grand = list.reduce(
@@ -339,21 +357,28 @@ function addSummarySheet(
       acc.minutes += t.minutes;
       acc.overtime += t.overtime;
       acc.personDays += t.personDays;
+      acc.presentDays += t.presentDays;
       return acc;
     },
-    { minutes: 0, overtime: 0, personDays: 0 },
+    { minutes: 0, overtime: 0, personDays: 0, presentDays: 0 },
   );
+  const lastRow = firstRow + list.length - 1;
+  const sumOf = (col: string, value: number) => ({
+    formula: `SUM(${col}${firstRow}:${col}${lastRow})`,
+    result: value,
+  });
   const sum = ws.addRow([
     "",
     "جمع کل",
     "",
     "",
-    "",
-    Math.round(grand.personDays * 100) / 100,
-    humanDuration(grand.minutes),
-    grand.overtime ? humanDuration(grand.overtime) : "-",
+    sumOf("E", grand.presentDays),
+    sumOf("F", round2(grand.personDays)),
+    sumOf("G", toHours(grand.minutes)),
+    sumOf("H", toHours(grand.overtime)),
   ]);
   borderRow(sum, COLS);
+  numericCells(sum, NUM_COLS);
   sum.eachCell({ includeEmpty: true }, (c) => {
     c.font = { bold: true };
     c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: SUBHEAD_FILL } };
@@ -375,11 +400,13 @@ function addWorkerSheet(
     views: [{ rightToLeft: true }],
     pageSetup: { orientation: "portrait", fitToPage: true, fitToWidth: 1 },
   });
-  const widths = [6, 14, 12, 20, 9, 9, 14, 13];
+  const widths = [6, 13, 11, 19, 8, 8, 12, 10, 12];
   widths.forEach((x, i) => {
     ws.getColumn(i + 1).width = x;
   });
   const COLS = widths.length;
+  // ستون‌های عددی (کارکرد، نفر-روز، اضافه‌کاری) برای جمع‌زدن با AutoSum
+  const NUM_COLS = [7, 8, 9];
 
   title(ws, `کارکرد ${w.name} — ${monthLabel}`, COLS, 14);
   const meta = [w.trade, w.employmentType].filter(Boolean).join("، ") || "—";
@@ -395,8 +422,9 @@ function addWorkerSheet(
       "وضعیت",
       "ورود",
       "خروج",
-      "کارکرد",
-      "اضافه‌کاری",
+      "کارکرد (ساعت)",
+      "نفر-روز",
+      "اضافه‌کاری (ساعت)",
     ],
     COLS,
   );
@@ -420,6 +448,8 @@ function addWorkerSheet(
       status = "بدون ثبت";
     }
 
+    // مقادیر ساعتی و نفر-روز به‌صورت عدد (نه متن) تا با AutoSum جمع شوند؛
+    // روزهای بدون کارکرد خالی می‌مانند تا در جمع اثری نگذارند.
     const row = ws.addRow([
       d.day,
       d.key,
@@ -427,10 +457,12 @@ function addWorkerSheet(
       status,
       rec?.entry ?? "-",
       rec?.exit ?? "-",
-      rec && rec.workedMinutes ? humanDuration(rec.workedMinutes) : "-",
-      rec && rec.overtimeMinutes ? humanDuration(rec.overtimeMinutes) : "-",
+      rec?.workedMinutes ? toHours(rec.workedMinutes) : null,
+      rec?.dayFraction ? round2(rec.dayFraction) : null,
+      rec?.overtimeMinutes ? toHours(rec.overtimeMinutes) : null,
     ]);
     borderRow(row, COLS);
+    numericCells(row, NUM_COLS);
     if (fill) {
       row.eachCell({ includeEmpty: true }, (c) => {
         c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
@@ -439,17 +471,21 @@ function addWorkerSheet(
   }
 
   const t = totals(w);
+  const first = 5; // نخستین سطر داده (پس از دو عنوان، یک سطر خالی و سربرگ)
+  const last = first + days.length - 1;
   const sum = ws.addRow([
     "",
     "جمع ماه",
     "",
-    `${t.presentDays} روز کارکرد`,
+    `${t.presentDays} روز حضور`,
     "",
     "",
-    humanDuration(t.minutes),
-    t.overtime ? humanDuration(t.overtime) : "-",
+    { formula: `SUM(G${first}:G${last})`, result: toHours(t.minutes) },
+    { formula: `SUM(H${first}:H${last})`, result: round2(t.personDays) },
+    { formula: `SUM(I${first}:I${last})`, result: toHours(t.overtime) },
   ]);
   borderRow(sum, COLS);
+  numericCells(sum, NUM_COLS);
   sum.eachCell({ includeEmpty: true }, (c) => {
     c.font = { bold: true };
     c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: SUBHEAD_FILL } };
@@ -463,6 +499,24 @@ function addWorkerSheet(
   legend.getCell(1).font = { italic: true, size: 9, color: { argb: "FF808080" } };
 
   applyRtl(ws);
+}
+
+/** دقیقه → ساعتِ اعشاری (عدد، برای جمع‌زدن در اکسل) */
+function toHours(minutes: number): number {
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** قالب عددی برای ستون‌هایی که باید با AutoSum جمع شوند */
+function numericCells(row: ExcelJS.Row, cols: number[]) {
+  for (const c of cols) {
+    const cell = row.getCell(c);
+    cell.numFmt = "0.##";
+    cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center" };
+  }
 }
 
 function totals(w: WorkerSheet) {
