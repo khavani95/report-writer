@@ -1,4 +1,4 @@
-import { inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { holidays } from "@/db/schema";
 import { config } from "@/lib/config";
@@ -11,6 +11,12 @@ export interface HolidayInfo {
 }
 
 const TIMEOUT_MS = 8000;
+
+/**
+ * شناسه‌ی منبعِ فعلی. با تغییر سرویس تقویم باید عوض شود تا ردیف‌های
+ * کش‌شده‌ی سرویس قبلی (که ممکن است داده‌ی نادرست داشته باشند) نادیده گرفته شوند.
+ */
+const SOURCE = "pnldev-v1";
 
 /**
  * رویدادهای «روز جهانیِ ...» که در براکت نام ماه میلادی دارند، مناسبت‌اند
@@ -58,7 +64,10 @@ export async function getMonthHolidays(
         title: holidays.title,
       })
       .from(holidays)
-      .where(inArray(holidays.jalaliDate, keys));
+      // فقط ردیف‌های همین منبع؛ کشِ سرویس‌های قبلی نادیده گرفته می‌شود
+      .where(
+        and(inArray(holidays.jalaliDate, keys), eq(holidays.source, SOURCE)),
+      );
     for (const c of cached) {
       result.set(c.jalaliDate, { isHoliday: c.isHoliday, title: c.title });
     }
@@ -79,9 +88,19 @@ export async function getMonthHolidays(
               jalaliDate,
               isHoliday: info.isHoliday,
               title: info.title,
+              source: SOURCE,
             })),
           )
-          .onConflictDoNothing();
+          // ردیف‌های منبع قدیمی باید بازنویسی شوند، نه نادیده گرفته
+          .onConflictDoUpdate({
+            target: holidays.jalaliDate,
+            set: {
+              isHoliday: sql`excluded.is_holiday`,
+              title: sql`excluded.title`,
+              source: SOURCE,
+              fetchedAt: new Date(),
+            },
+          });
       } catch (e) {
         console.error("[holidays] cache write failed:", e);
       }

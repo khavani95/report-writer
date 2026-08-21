@@ -210,6 +210,11 @@ export const holidays = pgTable("holidays", {
   jalaliDate: text("jalali_date").primaryKey(), // 1405/04/30
   isHoliday: boolean("is_holiday").notNull().default(false),
   title: text("title"),
+  /**
+   * منبع داده. با تغییر سرویس تقویم، این مقدار عوض می‌شود تا ردیف‌های
+   * کش‌شده‌ی سرویس قبلی نادیده گرفته و بازنویسی شوند.
+   */
+  source: text("source").notNull().default("legacy"),
   fetchedAt: timestamp("fetched_at").notNull().defaultNow(),
 });
 

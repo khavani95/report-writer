@@ -22,6 +22,13 @@
       "when": 1787325719143,
       "tag": "0002_holidays_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787327830424,
+      "tag": "0003_holiday_source",
+      "breakpoints": true
     }
   ]
 }
