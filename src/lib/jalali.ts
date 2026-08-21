@@ -1,4 +1,5 @@
-import { toJalaali, toGregorian } from "jalaali-js";
+import { toJalaali, toGregorian, jalaaliMonthLength } from "jalaali-js";
+import { fixedHolidayTitle } from "./holidays";
 
 const FA_MONTHS = [
   "فروردین",
@@ -108,6 +109,40 @@ export function jalaliDaysAgo(n: number): JalaliInfo {
   const d = nowInTehran();
   d.setDate(d.getDate() - n);
   return toJalali(d);
+}
+
+/** یک روز از تقویم ماهانه (برای دیتاشیت کارکرد) */
+export interface JalaliDayInfo {
+  /** شماره‌ی روز در ماه (۱ تا ۳۱) */
+  day: number;
+  /** کلید کامل تاریخ: 1405/04/30 */
+  key: string;
+  /** نام روز هفته */
+  weekday: string;
+  /** جمعه (تعطیل هفتگی) */
+  isFriday: boolean;
+  /** عنوان تعطیل رسمی، اگر باشد */
+  holiday: string | null;
+}
+
+/** همه‌ی روزهای یک ماه شمسی («1405/04») به‌همراه روز هفته و تعطیلات */
+export function monthDays(ym: string): JalaliDayInfo[] {
+  const [jy, jm] = ym.split("/").map(Number);
+  if (!jy || !jm || jm < 1 || jm > 12) return [];
+  const len = jalaaliMonthLength(jy, jm);
+  const out: JalaliDayInfo[] = [];
+  for (let jd = 1; jd <= len; jd++) {
+    const { gy, gm, gd } = toGregorian(jy, jm, jd);
+    const dow = new Date(gy, gm - 1, gd).getDay();
+    out.push({
+      day: jd,
+      key: `${jy}/${String(jm).padStart(2, "0")}/${String(jd).padStart(2, "0")}`,
+      weekday: FA_WEEKDAYS[dow],
+      isFriday: dow === 5,
+      holiday: fixedHolidayTitle(jm, jd),
+    });
+  }
+  return out;
 }
 
 /** برچسب ماه از کلید «1405/04» → «تیر ۱۴۰۵» */

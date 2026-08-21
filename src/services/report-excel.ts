@@ -37,8 +37,8 @@ export async function buildTableExcel(
   return Buffer.from(buf);
 }
 
-const HEADER_FILL = "FF1F4E78";
-const SUBHEAD_FILL = "FFDDEBF7";
+export const HEADER_FILL = "FF1F4E78";
+export const SUBHEAD_FILL = "FFDDEBF7";
 
 /** تعداد ستون‌های شبکه‌ی گزارش روزانه */
 const COLS = 9;
@@ -427,7 +427,7 @@ function autoWidth(ws: ExcelJS.Worksheet, widths: number[]) {
   });
 }
 
-function thinBorder(): Partial<ExcelJS.Borders> {
+export function thinBorder(): Partial<ExcelJS.Borders> {
   const s = { style: "thin" as const, color: { argb: "FFBFBFBF" } };
   return { top: s, bottom: s, left: s, right: s };
 }
