@@ -44,9 +44,15 @@ import {
 import { buildMonthlyZip } from "@/services/monthly-zip";
 import { buildMonthlyTimesheet } from "@/services/timesheet";
 import {
+  getMonthHolidays,
+  setManualHoliday,
+  clearManualHoliday,
+} from "@/services/holiday-service";
+import {
   toJalali,
   jalaliDaysAgo,
   jalaliMonthLabel,
+  monthDays,
   parseJalaliInput,
   toFaDigits,
   type JalaliInfo,
@@ -182,7 +188,8 @@ function registerHandlers(bot: Bot) {
     const kb = new InlineKeyboard();
     for (const r of REPORTS) kb.text(r.title, `rep:${r.key}`).row();
     kb.text("📅 دیتاشیت کارکرد ماهانه", "rep:timesheet").row();
-    kb.text("🗂️ بسته‌ی گزارش‌های روزانه (zip)", "rep:zip");
+    kb.text("🗂️ بسته‌ی گزارش‌های روزانه (zip)", "rep:zip").row();
+    kb.text("🗓️ بررسی و اصلاح تعطیلات", "rep:holidays");
     await ctx.reply(
       `📈 گزارش‌های «${project.name}»\nکدام گزارش را می‌خواهی؟`,
       { reply_markup: kb },
@@ -243,6 +250,17 @@ function registerHandlers(bot: Bot) {
       const project = await getActiveProject(chatId);
       if (!project) return await ctx.reply(MSG.selectProjectFirst);
       const month = monthArg === "all" ? undefined : monthArg;
+
+      // بررسی و اصلاح تعطیلات ماه
+      if (type === "holidays") {
+        if (!month) {
+          await ctx.reply("برای تقویم باید یک ماه مشخص انتخاب کنی.");
+          return;
+        }
+        await ctx.reply("⏳ در حال خواندن تقویم…");
+        await showHolidayCalendar(ctx, month);
+        return;
+      }
 
       // دیتاشیت کارکرد ماهانه
       if (type === "timesheet") {
@@ -325,12 +343,39 @@ function registerHandlers(bot: Bot) {
           ? "🗂️ بسته‌ی گزارش‌های روزانه"
           : type === "timesheet"
             ? "📅 دیتاشیت کارکرد ماهانه"
-            : `📈 ${reportTitle(type as ReportType)}`;
+            : type === "holidays"
+              ? "🗓️ بررسی و اصلاح تعطیلات"
+              : `📈 ${reportTitle(type as ReportType)}`;
       const kb = new InlineKeyboard();
       for (const m of months) kb.text(m.label, `repm:${type}:${m.key}`).row();
-      // دیتاشیت ذاتاً ماهانه است و گزینه‌ی «همه‌ی ماه‌ها» ندارد
-      if (type !== "timesheet") kb.text("📅 همه‌ی ماه‌ها", `repm:${type}:all`);
+      // دیتاشیت و تقویم ذاتاً ماهانه‌اند و گزینه‌ی «همه‌ی ماه‌ها» ندارند
+      if (type !== "timesheet" && type !== "holidays") {
+        kb.text("📅 همه‌ی ماه‌ها", `repm:${type}:all`);
+      }
       await ctx.reply(`${title}\nکدام ماه؟`, { reply_markup: kb });
+      return;
+    }
+
+    // تغییر وضعیت تعطیلیِ یک روز (اصلاح دستی)
+    if (data.startsWith("hol:")) {
+      const [, month, dayStr] = data.split(":");
+      const key = `${month}/${dayStr}`;
+      const current = await getMonthHolidays(month);
+      const info = current.get(key);
+      const day = monthDays(month).find((d) => d.key === key);
+      if (!day) return;
+
+      if (day.isFriday) {
+        await ctx.reply("جمعه‌ها تعطیل هفتگی‌اند و تغییر نمی‌کنند.");
+        return;
+      }
+      if (info?.source === "manual") {
+        // اصلاح دستی → برداشتن اصلاح تا دوباره از تقویم خوانده شود
+        await clearManualHoliday(key);
+      } else {
+        await setManualHoliday(key, !info?.isHoliday, info?.title ?? null);
+      }
+      await showHolidayCalendar(ctx, month);
       return;
     }
 
@@ -605,4 +650,59 @@ async function finalize(bot: Bot, ctx: Context, project: Project, day: WorkDay) 
   await setDayStatus(day.id, "closed");
   await clearConversationState(ctx.chat!.id);
   await ctx.reply("✅ گزارش نهایی ثبت شد.", { reply_markup: projectKeyboard() });
+}
+
+/**
+ * تقویم ماه به‌صورت دکمه‌ای: هر روز یک دکمه.
+ * با زدن هر روز، تعطیلی‌اش دستی تغییر می‌کند و این اصلاح بر تقویم اولویت دارد.
+ */
+async function showHolidayCalendar(ctx: Context, month: string) {
+  const days = monthDays(month);
+  if (!days.length) {
+    await ctx.reply("ماه نامعتبر است.");
+    return;
+  }
+  const map = await getMonthHolidays(month);
+
+  const kb = new InlineKeyboard();
+  days.forEach((d, i) => {
+    const info = map.get(d.key);
+    const mark = d.isFriday
+      ? "🔵"
+      : info?.source === "manual"
+        ? info.isHoliday
+          ? "✏️🔴"
+          : "✏️⬜️"
+        : info?.isHoliday
+          ? "🔴"
+          : "⬜️";
+    kb.text(`${mark}${toFaDigits(d.day)}`, `hol:${month}:${d.key.slice(-2)}`);
+    if ((i + 1) % 5 === 0) kb.row();
+  });
+
+  const official = days
+    .filter((d) => !d.isFriday && map.get(d.key)?.isHoliday)
+    .map((d) => {
+      const info = map.get(d.key)!;
+      const edited = info.source === "manual" ? " ✏️" : "";
+      return `• ${toFaDigits(d.day)} ${d.weekday} — ${info.title ?? "تعطیل"}${edited}`;
+    });
+
+  const sources = new Set(days.map((d) => map.get(d.key)?.source));
+  const srcLabel = sources.has("api")
+    ? "تقویم رسمی"
+    : sources.has("fallback")
+      ? "فهرست داخلی (سرویس در دسترس نبود)"
+      : "اصلاح دستی";
+
+  const text =
+    `🗓️ تعطیلات ${jalaliMonthLabel(month)}\n` +
+    `منبع: ${srcLabel}\n\n` +
+    (official.length
+      ? "تعطیلات رسمی (غیر از جمعه‌ها):\n" + official.join("\n")
+      : "تعطیل رسمی‌ای (غیر از جمعه‌ها) ثبت نشده.") +
+    "\n\n🔴 تعطیل • ⬜️ کاری • 🔵 جمعه • ✏️ اصلاح‌شده توسط شما\n" +
+    "برای اصلاح روی روز بزن. زدنِ دوباره روی روزِ اصلاح‌شده، آن را به حالت تقویم برمی‌گرداند.";
+
+  await ctx.reply(text, { reply_markup: kb });
 }

@@ -8,6 +8,8 @@ export interface HolidayInfo {
   isHoliday: boolean;
   /** عنوان تعطیل رسمی؛ برای جمعه‌ها null است */
   title: string | null;
+  /** منبعِ این داده — برای عیب‌یابی و اولویت‌دهی */
+  source?: "manual" | "api" | "fallback";
 }
 
 const TIMEOUT_MS = 8000;
@@ -17,6 +19,13 @@ const TIMEOUT_MS = 8000;
  * کش‌شده‌ی سرویس قبلی (که ممکن است داده‌ی نادرست داشته باشند) نادیده گرفته شوند.
  */
 const SOURCE = "pnldev-v1";
+
+/**
+ * اصلاحِ دستیِ کاربر. بالاترین اولویت را دارد و هرگز با داده‌ی سرویس
+ * بازنویسی نمی‌شود؛ چون تعطیلات رسمی ایران گاهی با مصوبه تغییر می‌کنند
+ * و هیچ سرویسی صددرصد قابل اتکا نیست.
+ */
+export const MANUAL_SOURCE = "manual";
 
 /**
  * رویدادهای «روز جهانیِ ...» که در براکت نام ماه میلادی دارند، مناسبت‌اند
@@ -55,21 +64,36 @@ export async function getMonthHolidays(
   const keys = days.map((d) => d.key);
   const db = getDb();
 
-  // ۱) کشِ موجود
+  // ۱) کش: اصلاحاتِ دستی بالاترین اولویت، سپس کشِ سرویسِ فعلی
+  const manualKeys = new Set<string>();
   try {
     const cached = await db
       .select({
         jalaliDate: holidays.jalaliDate,
         isHoliday: holidays.isHoliday,
         title: holidays.title,
+        source: holidays.source,
       })
       .from(holidays)
-      // فقط ردیف‌های همین منبع؛ کشِ سرویس‌های قبلی نادیده گرفته می‌شود
-      .where(
-        and(inArray(holidays.jalaliDate, keys), eq(holidays.source, SOURCE)),
-      );
+      .where(inArray(holidays.jalaliDate, keys));
+
     for (const c of cached) {
-      result.set(c.jalaliDate, { isHoliday: c.isHoliday, title: c.title });
+      if (c.source !== MANUAL_SOURCE) continue;
+      manualKeys.add(c.jalaliDate);
+      result.set(c.jalaliDate, {
+        isHoliday: c.isHoliday,
+        title: c.title,
+        source: "manual",
+      });
+    }
+    for (const c of cached) {
+      // کشِ سرویس‌های قدیمی نادیده گرفته می‌شود
+      if (c.source !== SOURCE || manualKeys.has(c.jalaliDate)) continue;
+      result.set(c.jalaliDate, {
+        isHoliday: c.isHoliday,
+        title: c.title,
+        source: "api",
+      });
     }
   } catch (e) {
     console.error("[holidays] cache read failed:", e);
@@ -79,28 +103,34 @@ export async function getMonthHolidays(
   if (result.size < days.length) {
     const fetched = await fetchMonth(month, days);
     if (fetched) {
-      for (const [key, info] of fetched) result.set(key, info);
+      for (const [key, info] of fetched) {
+        if (manualKeys.has(key)) continue; // اصلاح دستی دست‌نخورده می‌ماند
+        result.set(key, { ...info, source: "api" });
+      }
       try {
-        await db
-          .insert(holidays)
-          .values(
-            [...fetched.entries()].map(([jalaliDate, info]) => ({
-              jalaliDate,
-              isHoliday: info.isHoliday,
-              title: info.title,
-              source: SOURCE,
-            })),
-          )
-          // ردیف‌های منبع قدیمی باید بازنویسی شوند، نه نادیده گرفته
-          .onConflictDoUpdate({
-            target: holidays.jalaliDate,
-            set: {
-              isHoliday: sql`excluded.is_holiday`,
-              title: sql`excluded.title`,
-              source: SOURCE,
-              fetchedAt: new Date(),
-            },
-          });
+        const rows = [...fetched.entries()]
+          .filter(([jalaliDate]) => !manualKeys.has(jalaliDate))
+          .map(([jalaliDate, info]) => ({
+            jalaliDate,
+            isHoliday: info.isHoliday,
+            title: info.title,
+            source: SOURCE,
+          }));
+        if (rows.length) {
+          await db
+            .insert(holidays)
+            .values(rows)
+            // ردیف‌های منبع قدیمی باید بازنویسی شوند، نه نادیده گرفته
+            .onConflictDoUpdate({
+              target: holidays.jalaliDate,
+              set: {
+                isHoliday: sql`excluded.is_holiday`,
+                title: sql`excluded.title`,
+                source: SOURCE,
+                fetchedAt: new Date(),
+              },
+            });
+        }
       } catch (e) {
         console.error("[holidays] cache write failed:", e);
       }
@@ -117,10 +147,53 @@ export async function getMonthHolidays(
     result.set(d.key, {
       isHoliday: Boolean(d.holiday) || d.isFriday,
       title: d.holiday,
+      source: "fallback",
     });
   }
 
   return result;
+}
+
+/**
+ * ثبت/برداشتنِ دستیِ تعطیلیِ یک روز. این اصلاح بر داده‌ی سرویس اولویت دارد
+ * و در بازتولیدهای بعدی حفظ می‌شود.
+ */
+export async function setManualHoliday(
+  jalaliDate: string,
+  isHoliday: boolean,
+  title: string | null,
+): Promise<void> {
+  const db = getDb();
+  await db
+    .insert(holidays)
+    .values({
+      jalaliDate,
+      isHoliday,
+      title: isHoliday ? (title ?? "تعطیل رسمی") : null,
+      source: MANUAL_SOURCE,
+    })
+    .onConflictDoUpdate({
+      target: holidays.jalaliDate,
+      set: {
+        isHoliday,
+        title: isHoliday ? (title ?? "تعطیل رسمی") : null,
+        source: MANUAL_SOURCE,
+        fetchedAt: new Date(),
+      },
+    });
+}
+
+/** حذف اصلاحِ دستیِ یک روز تا دوباره از سرویس تقویم خوانده شود */
+export async function clearManualHoliday(jalaliDate: string): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(holidays)
+    .where(
+      and(
+        eq(holidays.jalaliDate, jalaliDate),
+        eq(holidays.source, MANUAL_SOURCE),
+      ),
+    );
 }
 
 /** دریافت کل ماه از سرویس تقویم؛ در صورت خطا null */
