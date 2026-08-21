@@ -4,8 +4,20 @@ import { getDb } from "@/db";
 import { attendance, workDays, workers } from "@/db/schema";
 import { HEADER_FILL, SUBHEAD_FILL, thinBorder, applyRtl } from "./report-excel";
 import { getMonthHolidays } from "./holiday-service";
+import {
+  NUM_FMT,
+  TIME_FMT,
+  dayFractionFormula,
+  overtimeFormula,
+  sumFormula,
+  timeValue,
+  workedHoursFormula,
+} from "./excel-formulas";
 import { monthDays, jalaliMonthLabel, type JalaliDayInfo } from "@/lib/jalali";
 import type { Project } from "@/db/schema";
+
+/** نخستین سطرِ داده در برگه‌ی هر نیرو (۲ عنوان + ۱ خالی + ۱ سربرگ) */
+const FIRST_DATA_ROW = 5;
 
 const HOLIDAY_FILL = "FFFCE4E4"; // تعطیل رسمی
 const FRIDAY_FILL = "FFF2F2F2"; // جمعه
@@ -25,7 +37,15 @@ interface WorkerSheet {
   trade: string | null;
   employmentType: string | null;
   byDate: Map<string, DayRecord>;
+  /** نام برگه‌ی این نیرو — از پیش محاسبه می‌شود تا برگه‌های دیگر به آن ارجاع دهند */
+  sheet: string;
 }
+
+/** ارجاع به یک سلول در برگه‌ی یک نیرو (با در نظر گرفتن کوتیشن در نام) */
+function ref(sheet: string, cell: string): string {
+  return `'${sheet.replace(/'/g, "''")}'!${cell}`;
+}
+
 
 /**
  * دیتاشیت کارکرد ماهانه: یک فایل اکسل برای همه‌ی نیروهای آن ماه.
@@ -81,6 +101,7 @@ export async function buildMonthlyTimesheet(
         trade: r.trade,
         employmentType: r.employmentType,
         byDate: new Map(),
+        sheet: "",
       };
       byWorker.set(r.workerId, w);
     }
@@ -101,12 +122,19 @@ export async function buildMonthlyTimesheet(
   const wb = new ExcelJS.Workbook();
   wb.creator = "روزنگار";
   wb.created = new Date();
+  // همه‌ی ستون‌های محاسباتی فرمول‌اند؛ اکسل هنگام باز کردن یک‌بار همه را
+  // بازمحاسبه کند تا مقدارِ ذخیره‌شده هرگز با فرمول ناهماهنگ نماند.
+  wb.calcProperties.fullCalcOnLoad = true;
+
+  // نام برگه‌ها از پیش تعیین می‌شود تا برگه‌های خلاصه و جدول ماهانه
+  // بتوانند با فرمول به برگه‌ی هر نیرو ارجاع دهند
+  const used = new Set<string>();
+  for (const w of list) w.sheet = sheetName(w.name, used);
 
   addGridSheet(wb, project, monthLabel, days, list);
   addSummarySheet(wb, project, monthLabel, days, list);
-  const used = new Set<string>();
   for (const w of list) {
-    addWorkerSheet(wb, project, monthLabel, days, w, used);
+    addWorkerSheet(wb, project, monthLabel, days, w);
   }
 
   const arrayBuffer = await wb.xlsx.writeBuffer();
@@ -247,16 +275,17 @@ function addGridSheet(
       cell.border = thinBorder();
     });
 
-    // جمع‌های عددی (قابل جمع‌زدن با AutoSum)
+    // جمع‌ها با فرمول از برگه‌ی همان نیرو خوانده می‌شوند
     const t = totals(w);
-    const cells: Array<[number, number]> = [
-      [SUM_HOURS, toHours(t.minutes)],
-      [SUM_DAYS, round2(t.personDays)],
+    const wTotal = FIRST_DATA_ROW + days.length;
+    const cells: Array<[number, string, number]> = [
+      [SUM_HOURS, `G${wTotal}`, toHours(t.minutes)],
+      [SUM_DAYS, `H${wTotal}`, round2(t.personDays)],
     ];
-    for (const [col, value] of cells) {
+    for (const [col, addr, value] of cells) {
       const cell = row.getCell(col);
-      cell.value = value;
-      cell.numFmt = "0.##";
+      cell.value = { formula: `${ref(w.sheet, addr)}`, result: value };
+      cell.numFmt = NUM_FMT;
       cell.font = { bold: true, size: 9 };
       cell.alignment = { horizontal: "center", vertical: "middle" };
       cell.border = thinBorder();
@@ -267,7 +296,7 @@ function addGridSheet(
   ws.addRow([]);
   const legend = ws.addRow([]);
   legend.getCell(1).value =
-    "راهنما: خانه‌ی سبز = ورود/خروج آن روز • «ج» = جمعه • «ت» = تعطیل رسمی • «-» = بدون ثبت";
+    "راهنما: خانه‌ی سبز = ورود/خروج آن روز • «ج» = جمعه • «ت» = تعطیل رسمی • خانه‌ی خالی = بدون ثبت • ستون‌های کارکرد و نفر-روز با فرمول از برگه‌ی هر نیرو خوانده می‌شوند";
   ws.mergeCells(legend.number, 1, legend.number, Math.min(totalCols - 1, 16));
   legend.getCell(1).font = { italic: true, size: 9, color: { argb: "FF808080" } };
 
@@ -335,6 +364,11 @@ function addSummarySheet(
   const NUM_COLS = [5, 6, 7, 8];
   const firstRow = ws.rowCount + 1;
 
+  // مقادیر از برگه‌ی خودِ نیرو خوانده می‌شوند تا با ویرایش آن، اینجا هم به‌روز شود
+  const wFirst = FIRST_DATA_ROW;
+  const wLast = wFirst + days.length - 1;
+  const wTotal = wLast + 1;
+
   list.forEach((w, i) => {
     const t = totals(w);
     const row = ws.addRow([
@@ -342,10 +376,13 @@ function addSummarySheet(
       w.name,
       w.trade ?? "-",
       w.employmentType ?? "-",
-      t.presentDays,
-      round2(t.personDays),
-      toHours(t.minutes),
-      toHours(t.overtime),
+      {
+        formula: `COUNT(${ref(w.sheet, `H${wFirst}:H${wLast}`)})`,
+        result: t.presentDays,
+      },
+      { formula: `${ref(w.sheet, `H${wTotal}`)}`, result: round2(t.personDays) },
+      { formula: `${ref(w.sheet, `G${wTotal}`)}`, result: toHours(t.minutes) },
+      { formula: `${ref(w.sheet, `I${wTotal}`)}`, result: toHours(t.overtime) },
     ]);
     borderRow(row, COLS);
     numericCells(row, NUM_COLS);
@@ -364,7 +401,7 @@ function addSummarySheet(
   );
   const lastRow = firstRow + list.length - 1;
   const sumOf = (col: string, value: number) => ({
-    formula: `SUM(${col}${firstRow}:${col}${lastRow})`,
+    formula: sumFormula(col, firstRow, lastRow),
     result: value,
   });
   const sum = ws.addRow([
@@ -394,9 +431,8 @@ function addWorkerSheet(
   monthLabel: string,
   days: JalaliDayInfo[],
   w: WorkerSheet,
-  used: Set<string>,
 ) {
-  const ws = wb.addWorksheet(sheetName(w.name, used), {
+  const ws = wb.addWorksheet(w.sheet, {
     views: [{ rightToLeft: true }],
     pageSetup: { orientation: "portrait", fitToPage: true, fitToWidth: 1 },
   });
@@ -448,22 +484,33 @@ function addWorkerSheet(
       status = "بدون ثبت";
     }
 
-    // مقادیر ساعتی و نفر-روز به‌صورت عدد (نه متن) تا با AutoSum جمع شوند؛
-    // روزهای بدون کارکرد خالی می‌مانند تا در جمع اثری نگذارند.
+    // ورود/خروج مقدارِ زمانیِ واقعیِ اکسل‌اند و ستون‌های بعدی با فرمول
+    // از روی همان‌ها محاسبه می‌شوند؛ پس با ویرایش ساعت‌ها همه‌چیز به‌روز می‌شود.
+    const r = ws.rowCount + 1;
     const row = ws.addRow([
       d.day,
       d.key,
       d.weekday,
       status,
-      // روزهای بدون ورود/خروج خالی می‌مانند (به‌جای خط تیره)
-      rec?.entry ?? null,
-      rec?.exit ?? null,
-      rec?.workedMinutes ? toHours(rec.workedMinutes) : null,
-      rec?.dayFraction ? round2(rec.dayFraction) : null,
-      rec?.overtimeMinutes ? toHours(rec.overtimeMinutes) : null,
+      timeValue(rec?.entry),
+      timeValue(rec?.exit),
+      { formula: workedHoursFormula(`E${r}`, `F${r}`), result: hoursOf(rec) },
+      {
+        formula: dayFractionFormula(`G${r}`),
+        result: rec?.dayFraction ? round2(rec.dayFraction) : undefined,
+      },
+      {
+        formula: overtimeFormula(`G${r}`),
+        result: rec ? toHours(rec.overtimeMinutes) : undefined,
+      },
     ]);
     borderRow(row, COLS);
     numericCells(row, NUM_COLS);
+    for (const c of [5, 6]) {
+      const cell = row.getCell(c);
+      cell.numFmt = TIME_FMT;
+      cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center" };
+    }
     if (fill) {
       row.eachCell({ includeEmpty: true }, (c) => {
         c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: fill } };
@@ -472,7 +519,7 @@ function addWorkerSheet(
   }
 
   const t = totals(w);
-  const first = 5; // نخستین سطر داده (پس از دو عنوان، یک سطر خالی و سربرگ)
+  const first = FIRST_DATA_ROW;
   const last = first + days.length - 1;
   const sum = ws.addRow([
     "",
@@ -481,9 +528,9 @@ function addWorkerSheet(
     `${t.presentDays} روز حضور`,
     "",
     "",
-    { formula: `SUM(G${first}:G${last})`, result: toHours(t.minutes) },
-    { formula: `SUM(H${first}:H${last})`, result: round2(t.personDays) },
-    { formula: `SUM(I${first}:I${last})`, result: toHours(t.overtime) },
+    { formula: sumFormula("G", first, last), result: toHours(t.minutes) },
+    { formula: sumFormula("H", first, last), result: round2(t.personDays) },
+    { formula: sumFormula("I", first, last), result: toHours(t.overtime) },
   ]);
   borderRow(sum, COLS);
   numericCells(sum, NUM_COLS);
@@ -507,6 +554,11 @@ function toHours(minutes: number): number {
   return Math.round((minutes / 60) * 100) / 100;
 }
 
+/** مقدارِ از پیش محاسبه‌شده‌ی کارکرد (نتیجه‌ی اولیه‌ی فرمول) */
+function hoursOf(rec: DayRecord | undefined): number | undefined {
+  return rec ? toHours(rec.workedMinutes) : undefined;
+}
+
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
@@ -515,7 +567,7 @@ function round2(n: number): number {
 function numericCells(row: ExcelJS.Row, cols: number[]) {
   for (const c of cols) {
     const cell = row.getCell(c);
-    cell.numFmt = "0.##";
+    cell.numFmt = NUM_FMT;
     cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center" };
   }
 }

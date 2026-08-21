@@ -1,7 +1,15 @@
 import ExcelJS from "exceljs";
 import type { DaySummary } from "./consolidate";
 import type { ReportTable } from "./reports";
-import { humanDuration } from "./attendance-calc";
+import {
+  NUM_FMT,
+  TIME_FMT,
+  dayFractionFormula,
+  overtimeFormula,
+  sumFormula,
+  timeValue,
+  workedHoursFormula,
+} from "./excel-formulas";
 import type { WorkDay, Project } from "@/db/schema";
 
 /** ساخت اکسل از یک جدول گزارش دوره‌ای */
@@ -13,6 +21,7 @@ export async function buildTableExcel(
   const wb = new ExcelJS.Workbook();
   wb.creator = "روزنگار";
   wb.created = new Date();
+  wb.calcProperties.fullCalcOnLoad = true;
   const ws = wb.addWorksheet("گزارش", { views: [{ rightToLeft: true }] });
 
   const span = Math.max(table.columns.length, 1);
@@ -27,7 +36,29 @@ export async function buildTableExcel(
   ws.addRow([]);
 
   addHeaderRow(ws, table.columns);
+  const first = ws.rowCount + 1;
   for (const row of table.rows) ws.addRow(row as (string | number)[]);
+  const last = ws.rowCount;
+
+  // سطر جمع: هر ستونی که سراسر عددی است با SUM جمع می‌شود، نه با عددِ از پیش محاسبه‌شده
+  if (table.rows.length) {
+    const sum = ws.addRow([]);
+    sum.getCell(1).value = "جمع کل";
+    table.columns.forEach((_, i) => {
+      const numeric = table.rows.every(
+        (r) => typeof r[i] === "number" || r[i] === undefined || r[i] === null,
+      );
+      if (!numeric || i === 0) return;
+      const cell = sum.getCell(i + 1);
+      cell.value = {
+        formula: sumFormula(colLetter(i + 1), first, last),
+        result: table.rows.reduce((s, r) => s + (Number(r[i]) || 0), 0),
+      };
+      cell.numFmt = NUM_FMT;
+    });
+    boldRow(sum);
+  }
+
   autoWidth(
     ws,
     table.columns.map(() => 20),
@@ -66,8 +97,8 @@ export function applyRtl(ws: ExcelJS.Worksheet): void {
 }
 
 /** تعداد ستون‌های شبکه‌ی گزارش روزانه */
-const COLS = 9;
-const COL_WIDTHS = [5, 17, 13, 12, 9, 9, 13, 13, 13];
+const COLS = 10;
+const COL_WIDTHS = [5, 16, 12, 12, 11, 9, 9, 12, 10, 12];
 
 /**
  * ساخت فایل اکسل گزارش روزانه‌ی استاندارد کارگاه.
@@ -82,6 +113,8 @@ export async function buildDailyExcel(
   const wb = new ExcelJS.Workbook();
   wb.creator = "روزنگار";
   wb.created = new Date();
+  // خانه‌های محاسباتی فرمول‌اند؛ اکسل هنگام باز کردن یک‌بار همه را بازمحاسبه کند
+  wb.calcProperties.fullCalcOnLoad = true;
 
   const ws = wb.addWorksheet("گزارش روزانه", {
     views: [{ rightToLeft: true }],
@@ -134,62 +167,99 @@ export async function buildDailyExcel(
     "نسخه",
     day.revision > 0 ? `rev${String(day.revision).padStart(2, "0")}` : "اولیه",
   );
-  infoRow(
+  // این دو سطر با فرمول به جدول کارکرد وصل می‌شوند؛ چون جدول هنوز ساخته نشده،
+  // ابتدا مقدارِ ثابت می‌گیرند و پس از ساخت جدول با فرمول جایگزین می‌شوند.
+  const headCountRow = infoRow(
     ws,
     "تعداد نفرات",
     summary.workerCount,
     "جمع نفر-روز",
-    Math.round(personDays * 100) / 100,
+    round2(personDays),
   );
-  infoRow(
+  const headHoursRow = infoRow(
     ws,
-    "جمع کارکرد",
-    humanDuration(totalMinutes),
-    "جمع اضافه‌کاری",
-    totalOvertime ? humanDuration(totalOvertime) : "-",
+    "جمع کارکرد (ساعت)",
+    toHours(totalMinutes),
+    "جمع اضافه‌کاری (ساعت)",
+    toHours(totalOvertime),
   );
   spacer(ws);
 
   // ── ۲) کارکرد نیروی انسانی ────────────────────────
   sectionHeader(ws, "۱) کارکرد نیروی انسانی");
-  const attSpans = [1, 2, 1, 1, 1, 1, 1, 1];
+  // ستون‌ها: A ردیف | B-C نام | D تخصص | E نوع همکاری | F ورود | G خروج
+  //          H کارکرد | I نفر-روز | J اضافه‌کاری
+  const attSpans = [1, 2, 1, 1, 1, 1, 1, 1, 1];
   gridHeader(
     ws,
-    ["ردیف", "نام نیرو", "تخصص", "نوع همکاری", "ورود", "خروج", "کارکرد", "اضافه‌کاری"],
+    [
+      "ردیف",
+      "نام نیرو",
+      "تخصص",
+      "نوع همکاری",
+      "ورود",
+      "خروج",
+      "کارکرد (ساعت)",
+      "نفر-روز",
+      "اضافه‌کاری (ساعت)",
+    ],
     attSpans,
   );
   if (summary.attendance.length) {
+    const first = ws.rowCount + 1;
     summary.attendance.forEach((a, i) => {
-      gridRow(
+      const r = ws.rowCount + 1;
+      // ورود/خروج مقدارِ زمانیِ واقعی‌اند و بقیه با فرمول از روی همان‌ها
+      // محاسبه می‌شوند؛ با اصلاح ساعت در فایل، کارکرد و جمع‌ها به‌روز می‌شوند.
+      const row = gridRow(
         ws,
         [
           i + 1,
           a.name,
           a.trade ?? "-",
           a.employmentType ?? "-",
-          a.entry ?? "-",
-          a.exit ?? "-",
-          a.dayFraction >= 1 ? "۱ روز کامل" : humanDuration(a.workedMinutes),
-          a.overtimeMinutes ? humanDuration(a.overtimeMinutes) : "-",
+          timeValue(a.entry),
+          timeValue(a.exit),
+          {
+            formula: workedHoursFormula(`F${r}`, `G${r}`),
+            result: toHours(a.workedMinutes),
+          },
+          { formula: dayFractionFormula(`H${r}`), result: round2(a.dayFraction) },
+          {
+            formula: overtimeFormula(`H${r}`),
+            result: toHours(a.overtimeMinutes),
+          },
         ],
         attSpans,
       );
+      timeCells(row, [6, 7]);
+      numberCells(row, [8, 9, 10]);
     });
+    const last = ws.rowCount;
+
     const sum = gridRow(
       ws,
       [
         "",
-        `جمع: ${summary.workerCount} نفر`,
+        "جمع کل",
         "",
         "",
         "",
         "",
-        humanDuration(totalMinutes),
-        totalOvertime ? humanDuration(totalOvertime) : "-",
+        { formula: sumFormula("H", first, last), result: toHours(totalMinutes) },
+        { formula: sumFormula("I", first, last), result: round2(personDays) },
+        { formula: sumFormula("J", first, last), result: toHours(totalOvertime) },
       ],
       attSpans,
     );
+    numberCells(sum, [8, 9, 10]);
     boldRow(sum);
+
+    // حالا سربرگ می‌تواند به جدول ارجاع دهد
+    linkInfo(headCountRow, `COUNTA(B${first}:B${last})`, summary.workerCount);
+    linkInfo(headCountRow, `I${sum.number}`, round2(personDays), true);
+    linkInfo(headHoursRow, `H${sum.number}`, toHours(totalMinutes));
+    linkInfo(headHoursRow, `J${sum.number}`, toHours(totalOvertime), true);
   } else {
     emptyRow(ws, "نیرویی ثبت نشده است.");
   }
@@ -197,7 +267,7 @@ export async function buildDailyExcel(
 
   // ── ۳) شرح عملیات اجرایی ──────────────────────────
   sectionHeader(ws, "۲) شرح عملیات اجرایی و نیروهای درگیر");
-  const actSpans = [1, 2, 1, 1, 2, 2];
+  const actSpans = [1, 2, 1, 1, 2, 3];
   gridHeader(
     ws,
     ["ردیف", "جبهه‌ی کاری", "نوع فعالیت", "زمان", "شرح فعالیت", "نیروهای درگیر"],
@@ -230,7 +300,7 @@ export async function buildDailyExcel(
 
   // ── ۴) موانع و مشکلات ─────────────────────────────
   sectionHeader(ws, "۳) موانع، مشکلات و تأخیرات");
-  const issSpans = [1, 2, 3, 3];
+  const issSpans = [1, 2, 3, 4];
   gridHeader(ws, ["ردیف", "نوع", "شرح", "اثر / علت"], issSpans);
   if (summary.issues.length) {
     summary.issues.forEach((i, idx) => {
@@ -243,7 +313,7 @@ export async function buildDailyExcel(
 
   // ── ۵) دوباره‌کاری ────────────────────────────────
   sectionHeader(ws, "۴) دوباره‌کاری‌ها");
-  const rwSpans = [1, 2, 1, 2, 3];
+  const rwSpans = [1, 2, 1, 2, 4];
   gridHeader(ws, ["ردیف", "محل", "مقدار", "علت", "شرح"], rwSpans);
   if (summary.reworks.length) {
     summary.reworks.forEach((r, idx) => {
@@ -285,15 +355,18 @@ function sectionHeader(ws: ExcelJS.Worksheet, text: string) {
   row.height = 22;
 }
 
+/** ستون‌های مقدار در سطرِ «برچسب: مقدار» (چیدمان [2,3,2,3]) */
+const INFO_VALUE_COLS = [3, 8];
+
 /** یک ردیف «برچسب: مقدار» دوتایی در بخش مشخصات */
 function infoRow(
   ws: ExcelJS.Worksheet,
   l1: string,
-  v1: string | number,
+  v1: ExcelJS.CellValue,
   l2: string,
-  v2: string | number,
-) {
-  const row = gridRow(ws, [l1, v1, l2, v2], [2, 3, 2, 2]);
+  v2: ExcelJS.CellValue,
+): ExcelJS.Row {
+  const row = gridRow(ws, [l1, v1, l2, v2], [2, 3, 2, 3]);
   for (const col of [1, 6]) {
     const cell = row.getCell(col);
     cell.font = { bold: true };
@@ -303,6 +376,49 @@ function infoRow(
       fgColor: { argb: SUBHEAD_FILL },
     };
   }
+  return row;
+}
+
+/**
+ * جایگزینیِ مقدارِ ثابتِ یک خانه‌ی سربرگ با فرمولی که به جدول کارکرد ارجاع می‌دهد.
+ * `second` یعنی خانه‌ی مقدارِ دوم همان سطر.
+ */
+function linkInfo(
+  row: ExcelJS.Row,
+  formula: string,
+  result: number,
+  second = false,
+) {
+  const cell = row.getCell(INFO_VALUE_COLS[second ? 1 : 0]);
+  cell.value = { formula, result };
+  cell.numFmt = NUM_FMT;
+}
+
+/** خانه‌های ساعت (نمایش hh:mm) */
+function timeCells(row: ExcelJS.Row, cols: number[]) {
+  for (const c of cols) {
+    const cell = row.getCell(c);
+    cell.numFmt = TIME_FMT;
+    cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center" };
+  }
+}
+
+/** خانه‌های عددیِ قابل جمع با AutoSum */
+function numberCells(row: ExcelJS.Row, cols: number[]) {
+  for (const c of cols) {
+    const cell = row.getCell(c);
+    cell.numFmt = NUM_FMT;
+    cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center" };
+  }
+}
+
+/** دقیقه → ساعتِ اعشاری (عدد، نه متن) */
+function toHours(minutes: number): number {
+  return Math.round((minutes / 60) * 100) / 100;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 /** ردیف عنوان ستون‌های یک جدول */
@@ -327,7 +443,7 @@ function gridHeader(
 /** یک ردیف داده روی شبکه‌ی ستون‌ها (با ادغام بر اساس spans) */
 function gridRow(
   ws: ExcelJS.Worksheet,
-  values: Array<string | number>,
+  values: ExcelJS.CellValue[],
   spans: number[],
 ): ExcelJS.Row {
   const row = ws.addRow([]);
@@ -384,7 +500,7 @@ function spacer(ws: ExcelJS.Worksheet) {
 function signatureBlock(ws: ExcelJS.Worksheet) {
   const head = ws.addRow([]);
   head.getCell(1).value = "امضای کارفرما";
-  ws.mergeCells(head.number, 1, head.number, 4);
+  ws.mergeCells(head.number, 1, head.number, 5);
   head.getCell(6).value = "امضای پیمانکار";
   ws.mergeCells(head.number, 6, head.number, COLS);
   for (const col of [1, 6]) {
@@ -401,7 +517,7 @@ function signatureBlock(ws: ExcelJS.Worksheet) {
   head.height = 20;
 
   const box = ws.addRow([]);
-  ws.mergeCells(box.number, 1, box.number, 4);
+  ws.mergeCells(box.number, 1, box.number, 5);
   ws.mergeCells(box.number, 6, box.number, COLS);
   box.getCell(1).border = thinBorder();
   box.getCell(6).border = thinBorder();
@@ -409,7 +525,7 @@ function signatureBlock(ws: ExcelJS.Worksheet) {
 
   const name = ws.addRow([]);
   name.getCell(1).value = "نام و نام‌خانوادگی / تاریخ:";
-  ws.mergeCells(name.number, 1, name.number, 4);
+  ws.mergeCells(name.number, 1, name.number, 5);
   name.getCell(6).value = "نام و نام‌خانوادگی / تاریخ:";
   ws.mergeCells(name.number, 6, name.number, COLS);
   for (const col of [1, 6]) {
@@ -451,6 +567,18 @@ function autoWidth(ws: ExcelJS.Worksheet, widths: number[]) {
         cell.alignment = { vertical: "middle", wrapText: true };
     });
   });
+}
+
+/** شماره‌ی ستون → حرفِ ستون در اکسل (۱ → A) */
+function colLetter(n: number): string {
+  let s = "";
+  let x = n;
+  while (x > 0) {
+    const r = (x - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    x = Math.floor((x - 1) / 26);
+  }
+  return s;
 }
 
 export function thinBorder(): Partial<ExcelJS.Borders> {
