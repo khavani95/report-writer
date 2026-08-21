@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { attendance, workDays, workers } from "@/db/schema";
-import { HEADER_FILL, SUBHEAD_FILL, thinBorder } from "./report-excel";
+import { HEADER_FILL, SUBHEAD_FILL, thinBorder, applyRtl } from "./report-excel";
 import { humanDuration } from "./attendance-calc";
 import { getMonthHolidays } from "./holiday-service";
 import { monthDays, jalaliMonthLabel, type JalaliDayInfo } from "@/lib/jalali";
@@ -42,12 +42,11 @@ export async function buildMonthlyTimesheet(
 
   // تعطیلات رسمی از سرویس تقویم ایران (با کش و fallback داخلی)
   const holidayMap = await getMonthHolidays(month);
-  const days: JalaliDayInfo[] = baseDays.map((d) => {
-    const h = holidayMap.get(d.key);
-    // عنوان‌دار = تعطیل رسمی؛ تعطیلِ بی‌عنوان معمولاً همان جمعه است
-    const title = h?.title ?? d.holiday;
-    return { ...d, holiday: h?.isHoliday && title ? title : (d.holiday ?? null) };
-  });
+  const days: JalaliDayInfo[] = baseDays.map((d) => ({
+    ...d,
+    // عنوان از سرویس تقویم؛ جمعه‌ها عنوان ندارند و با isFriday مدیریت می‌شوند
+    holiday: holidayMap.get(d.key)?.title ?? d.holiday ?? null,
+  }));
 
   const db = getDb();
   const rows = await db
@@ -257,6 +256,8 @@ function addGridSheet(
     "راهنما: خانه‌ی سبز = ورود/خروج آن روز • «ج» = جمعه • «ت» = تعطیل رسمی • «-» = بدون ثبت";
   ws.mergeCells(legend.number, 1, legend.number, Math.min(totalCols - 1, 16));
   legend.getCell(1).font = { italic: true, size: 9, color: { argb: "FF808080" } };
+
+  applyRtl(ws);
 }
 
 /** نام کوتاه روز هفته برای سربرگ جدول */
@@ -356,6 +357,8 @@ function addSummarySheet(
     c.font = { bold: true };
     c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: SUBHEAD_FILL } };
   });
+
+  applyRtl(ws);
 }
 
 /** برگه‌ی یک نیرو: جدول روزهای ماه */
@@ -453,10 +456,12 @@ function addWorkerSheet(
 
   ws.addRow([]);
   const legend = ws.addRow([
-    "راهنما: «بدون ثبت» یعنی برای آن روز گزارشی ثبت نشده. تعطیلات مذهبیِ قمری خودکار علامت‌گذاری نمی‌شوند.",
+    "راهنما: «بدون ثبت» یعنی برای آن روز گزارشی ثبت نشده. تعطیلات رسمی از تقویم رسمی ایران گرفته می‌شود.",
   ]);
   ws.mergeCells(legend.number, 1, legend.number, COLS);
   legend.getCell(1).font = { italic: true, size: 9, color: { argb: "FF808080" } };
+
+  applyRtl(ws);
 }
 
 function totals(w: WorkerSheet) {
