@@ -2,7 +2,7 @@ import ExcelJS from "exceljs";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { attendance, workDays, workers } from "@/db/schema";
-import { HEADER_FILL, SUBHEAD_FILL, thinBorder } from "./report-excel";
+import { HEADER_FILL, SUBHEAD_FILL, thinBorder, applyRtl } from "./report-excel";
 import { humanDuration } from "./attendance-calc";
 import { getMonthHolidays } from "./holiday-service";
 import { monthDays, jalaliMonthLabel, type JalaliDayInfo } from "@/lib/jalali";
@@ -256,6 +256,8 @@ function addGridSheet(
     "راهنما: خانه‌ی سبز = ورود/خروج آن روز • «ج» = جمعه • «ت» = تعطیل رسمی • «-» = بدون ثبت";
   ws.mergeCells(legend.number, 1, legend.number, Math.min(totalCols - 1, 16));
   legend.getCell(1).font = { italic: true, size: 9, color: { argb: "FF808080" } };
+
+  applyRtl(ws);
 }
 
 /** نام کوتاه روز هفته برای سربرگ جدول */
@@ -355,6 +357,8 @@ function addSummarySheet(
     c.font = { bold: true };
     c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: SUBHEAD_FILL } };
   });
+
+  applyRtl(ws);
 }
 
 /** برگه‌ی یک نیرو: جدول روزهای ماه */
@@ -456,6 +460,8 @@ function addWorkerSheet(
   ]);
   ws.mergeCells(legend.number, 1, legend.number, COLS);
   legend.getCell(1).font = { italic: true, size: 9, color: { argb: "FF808080" } };
+
+  applyRtl(ws);
 }
 
 function totals(w: WorkerSheet) {

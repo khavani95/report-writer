@@ -32,6 +32,7 @@ export async function buildTableExcel(
     ws,
     table.columns.map(() => 20),
   );
+  applyRtl(ws);
 
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf);
@@ -39,6 +40,30 @@ export async function buildTableExcel(
 
 export const HEADER_FILL = "FF1F4E78";
 export const SUBHEAD_FILL = "FFDDEBF7";
+
+/**
+ * راست‌به‌چپ کردن کاملِ یک برگه:
+ * هم جهت خودِ برگه، هم جهتِ نوشتار درون تک‌تک سلول‌ها (readingOrder).
+ * بدون این، متن فارسیِ ترکیب‌شده با عدد/لاتین در سلول جابه‌جا دیده می‌شود.
+ * تنظیمات موجود (مثل قفل سطر/ستون یا چینش خاص) حفظ می‌شوند.
+ */
+export function applyRtl(ws: ExcelJS.Worksheet): void {
+  const view = ws.views?.[0] ?? {};
+  ws.views = [{ ...view, rightToLeft: true }];
+
+  ws.eachRow({ includeEmpty: true }, (row) => {
+    row.eachCell({ includeEmpty: true }, (cell) => {
+      const a = cell.alignment ?? {};
+      cell.alignment = {
+        ...a,
+        vertical: a.vertical ?? "middle",
+        horizontal: a.horizontal ?? "right",
+        wrapText: a.wrapText ?? true,
+        readingOrder: "rtl",
+      };
+    });
+  });
+}
 
 /** تعداد ستون‌های شبکه‌ی گزارش روزانه */
 const COLS = 9;
@@ -242,6 +267,7 @@ export async function buildDailyExcel(
   // ── ۶) امضاها ─────────────────────────────────────
   signatureBlock(ws);
 
+  applyRtl(ws);
   const arrayBuffer = await wb.xlsx.writeBuffer();
   return Buffer.from(arrayBuffer);
 }
