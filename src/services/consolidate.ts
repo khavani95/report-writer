@@ -59,26 +59,36 @@ export interface DaySummary {
 /**
  * داده‌ی ساختاریافته‌ی یک روز (خروجی استخراج دسته‌ای) را در جدول‌ها می‌نویسد.
  * idempotent: نتایج قبلی روز پاک و از نو نوشته می‌شوند.
+ *
+ * `keepNonAttendance` برای وقتی است که هوش مصنوعی پاسخ نداده و داده‌ی ورودی
+ * فقط از پارسر قطعیِ ورود/خروج آمده. آن‌وقت فعالیت‌ها، موانع و دوباره‌کاری‌های
+ * قبلی دست‌نخورده می‌مانند؛ وگرنه یک خطای لحظه‌ایِ سرویس، کلِ گزارش روز را پاک می‌کند.
  */
 export async function writeDayData(
   projectId: number,
   workDayId: number,
   data: DayData,
+  opts?: { keepNonAttendance?: boolean },
 ): Promise<void> {
   const db = getDb();
+  const keep = opts?.keepNonAttendance === true;
 
   // پاک‌سازی نتایج قبلی
-  const oldActs = await db
-    .select({ id: activities.id })
-    .from(activities)
-    .where(eq(activities.workDayId, workDayId));
-  for (const a of oldActs) {
-    await db.delete(activityWorkers).where(eq(activityWorkers.activityId, a.id));
+  if (!keep) {
+    const oldActs = await db
+      .select({ id: activities.id })
+      .from(activities)
+      .where(eq(activities.workDayId, workDayId));
+    for (const a of oldActs) {
+      await db
+        .delete(activityWorkers)
+        .where(eq(activityWorkers.activityId, a.id));
+    }
+    await db.delete(activities).where(eq(activities.workDayId, workDayId));
+    await db.delete(issues).where(eq(issues.workDayId, workDayId));
+    await db.delete(reworks).where(eq(reworks.workDayId, workDayId));
   }
   await db.delete(attendance).where(eq(attendance.workDayId, workDayId));
-  await db.delete(activities).where(eq(activities.workDayId, workDayId));
-  await db.delete(issues).where(eq(issues.workDayId, workDayId));
-  await db.delete(reworks).where(eq(reworks.workDayId, workDayId));
 
   // کش تطبیق نام برای کاهش رفت‌وبرگشت به دیتابیس
   const cache = new Map<string, Worker>();
@@ -122,14 +132,21 @@ export async function writeDayData(
     });
   }
 
-  // نیروهای داخل فعالیت‌ها هم اگر در فهرست کارکرد نبودند، حاضر محسوب شوند
-  for (const a of data.activities) {
-    for (const nm of a.workers ?? []) {
-      const clean = nm.trim();
-      if (!clean) continue;
-      const worker = await resolve(clean);
-      if (!byId.has(worker.id)) add(worker, {});
-    }
+  // نیروهای داخل فعالیت‌ها هم اگر در فهرست کارکرد نبودند، حاضر محسوب شوند.
+  // در حالت keep، فعالیت‌های نگه‌داشته‌شده‌ی دیتابیس مرجع‌اند نه داده‌ی ورودی.
+  const activityNames = keep
+    ? (
+        await db
+          .select({ names: activities.workerNames })
+          .from(activities)
+          .where(eq(activities.workDayId, workDayId))
+      ).flatMap((a) => a.names ?? [])
+    : data.activities.flatMap((a) => a.workers ?? []);
+  for (const nm of activityNames) {
+    const clean = nm.trim();
+    if (!clean) continue;
+    const worker = await resolve(clean);
+    if (!byId.has(worker.id)) add(worker, {});
   }
 
   // به‌روزرسانی پروفایل نیروها
@@ -172,6 +189,9 @@ export async function writeDayData(
       overtimeMinutes,
     });
   }
+
+  // فعالیت‌ها/موانع/دوباره‌کاری‌های قبلی حفظ شده‌اند؛ چیزی بازنویسی نمی‌شود
+  if (keep) return;
 
   // ثبت فعالیت‌ها + نسبت‌دادن نفرات
   for (const a of data.activities) {
@@ -251,6 +271,30 @@ export function deterministicGaps(summary: DaySummary): string[] {
     }
   }
   return q;
+}
+
+/**
+ * نواقصی که کاربر در همین مرور برایشان اصلاحیه فرستاده را کنار می‌گذارد.
+ * اصلاحیه‌ها هنوز اعمال نشده‌اند (آخر کار یکجا به AI می‌روند)، پس بدون این
+ * پالایش، کارت پایانی چیزی را می‌پرسد که کاربر همین الان جواب داده است.
+ */
+export function pendingGaps(gaps: string[], changes: string[]): string[] {
+  const targets = changes
+    .map((c) => /^برای (.+?):/.exec(c)?.[1]?.trim())
+    .filter((t): t is string => Boolean(t));
+  if (!targets.length) return gaps;
+
+  const activitiesEdited = targets.includes("فعالیت‌ها");
+  return gaps.filter((g) => {
+    // با اصلاحِ «فعالیت‌ها»، سؤال‌های مربوط به فعالیت و انتساب نیرو منتفی‌اند
+    if (
+      activitiesEdited &&
+      (g.includes("چه کاری و کجا") || g.startsWith("فعالیت «"))
+    ) {
+      return false;
+    }
+    return !targets.some((t) => t !== "فعالیت‌ها" && g.includes(`«${t}»`));
+  });
 }
 
 /** مدت فعالیت زمان‌دار به دقیقه (۰ اگر بدون زمان یا تمام‌روز) */

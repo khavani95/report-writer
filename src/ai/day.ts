@@ -40,6 +40,12 @@ export interface DayData {
 export interface DayExtraction {
   data: DayData;
   questions: string[];
+  /**
+   * فراخوانیِ هوش مصنوعی شکست خورد (سهمیه، شبکه، پاسخ نامعتبر).
+   * در این حالت خروجی فقط از پارسر قطعیِ ورود/خروج می‌آید و فعالیت‌ها،
+   * موانع و دوباره‌کاری‌ها معتبر نیستند؛ نباید داده‌ی قبلی را با آن‌ها بازنویسی کرد.
+   */
+  aiFailed: boolean;
 }
 
 const SYSTEM = `تو دستیار تهیه‌ی «گزارش روزانه‌ی کارگاه ساختمانی» هستی.
@@ -148,7 +154,7 @@ export async function extractDay(
   conversation: string,
   knownWorkers: string[] = [],
 ): Promise<DayExtraction> {
-  let ai: DayExtraction = { data: EMPTY, questions: [] };
+  let ai: DayExtraction = { data: EMPTY, questions: [], aiFailed: true };
 
   try {
     const client = getGemini();
@@ -181,6 +187,7 @@ export async function extractDay(
         reworks: parsed.reworks ?? [],
       },
       questions: parsed.questions ?? [],
+      aiFailed: false,
     };
   } catch (e) {
     console.error("extractDay AI failed:", e);
