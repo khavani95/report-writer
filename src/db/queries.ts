@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   projects,
@@ -10,6 +10,7 @@ import {
   activityWorkers,
   attendance,
   conversationState,
+  processedUpdates,
   type Project,
   type Worker,
   type WorkDay,
@@ -622,4 +623,40 @@ export async function clearConversationState(chatId: number) {
         updatedAt: new Date(),
       },
     });
+}
+
+/**
+ * «تصاحبِ» یک آپدیت تلگرام: اگر تازه باشد true، اگر قبلاً پردازش شده false.
+ * درج با کلید اصلی انجام می‌شود، پس حتی اگر دو تحویلِ همزمان برسد فقط یکی
+ * موفق می‌شود. در صورت خطای دیتابیس true برمی‌گردانیم تا از دست رفتنِ پیام
+ * بدتر از پردازش دوباره نباشد.
+ */
+export async function claimUpdate(updateId: number): Promise<boolean> {
+  const db = getDb();
+  try {
+    const rows = await db
+      .insert(processedUpdates)
+      .values({ updateId })
+      .onConflictDoNothing()
+      .returning({ id: processedUpdates.updateId });
+    // گاه‌به‌گاه ردهای قدیمی پاک می‌شوند تا جدول بی‌نهایت بزرگ نشود
+    if (Math.random() < 0.005) await pruneProcessedUpdates();
+    return rows.length > 0;
+  } catch (e) {
+    console.error("[claimUpdate] failed:", e);
+    return true;
+  }
+}
+
+/** پاک‌سازی ردِ آپدیت‌های قدیمی‌تر از یک هفته */
+export async function pruneProcessedUpdates(): Promise<void> {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  try {
+    await db
+      .delete(processedUpdates)
+      .where(lt(processedUpdates.createdAt, cutoff));
+  } catch (e) {
+    console.error("[pruneProcessedUpdates] failed:", e);
+  }
 }

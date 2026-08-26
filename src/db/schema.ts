@@ -219,6 +219,16 @@ export const holidays = pgTable("holidays", {
 });
 
 /**
+ * آپدیت‌های تلگرامِ پردازش‌شده.
+ * تلگرام هر آپدیتی را که پاسخ ۲۰۰ نگیرد دوباره می‌فرستد؛ این جدول تضمین
+ * می‌کند هر آپدیت فقط یک‌بار اجرا شود (اجرای دوباره داده‌ی روز را خراب می‌کند).
+ */
+export const processedUpdates = pgTable("processed_updates", {
+  updateId: bigint("update_id", { mode: "number" }).primaryKey(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
  * موانع، مشکلات و تأخیرات.
  */
 export const issues = pgTable(

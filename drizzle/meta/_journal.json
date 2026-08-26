@@ -29,6 +29,13 @@
       "when": 1787327830424,
       "tag": "0003_holiday_source",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787752346516,
+      "tag": "0004_processed_updates",
+      "breakpoints": true
     }
   ]
 }
