@@ -27,6 +27,7 @@ import {
   getDayConversation,
   saveRawMessage,
   getConversationState,
+  claimUpdate,
   setAwaitDate,
   setCards,
   updateCardState,
@@ -69,13 +70,49 @@ let _bot: Bot | null = null;
 
 export function getBot(): Bot {
   if (_bot) return _bot;
-  const bot = new Bot(config.telegram.botToken);
+  const bot = new Bot(config.telegram.botToken, {
+    // پیش‌فرض grammY ۵۰۰ ثانیه است؛ یعنی یک درخواستِ کندِ تلگرام می‌تواند
+    // تابع سرورلس را تا سقف ۶۰ ثانیه‌اش بخواباند و آپدیت را بی‌پاسخ بگذارد.
+    client: { timeoutSeconds: 20 },
+  });
   registerHandlers(bot);
   _bot = bot;
   return bot;
 }
 
 function registerHandlers(bot: Bot) {
+  /**
+   * حصار خطا — بیرونی‌ترین لایه.
+   * اگر خطایی از اینجا بیرون برود، grammY آن را به وبهوک پرتاب می‌کند،
+   * پاسخ ۵۰۰ می‌شود و تلگرام همان آپدیت را بی‌پایان دوباره می‌فرستد.
+   */
+  bot.use(async (ctx, next) => {
+    try {
+      await next();
+    } catch (e) {
+      console.error("[bot] خطای هندلر:", e);
+      try {
+        await ctx.reply(MSG.error);
+      } catch {
+        /* حتی پاسخ‌دادن هم ممکن است شکست بخورد */
+      }
+    }
+  });
+
+  /**
+   * حذف آپدیت تکراری. تلگرام هر آپدیتی را که پاسخ ۲۰۰ نگیرد یا دیر پاسخ
+   * بگیرد دوباره می‌فرستد؛ بدون این بررسی، «پایان روز» دوبار اجرا می‌شود و
+   * چون writeDayData داده‌ی روز را پاک و از نو می‌نویسد، نتیجه خراب می‌شود.
+   */
+  bot.use(async (ctx, next) => {
+    const id = ctx.update.update_id;
+    if (id && !(await claimUpdate(id))) {
+      console.warn(`[bot] آپدیت تکراری ${id} نادیده گرفته شد`);
+      return;
+    }
+    await next();
+  });
+
   bot.use(async (ctx, next) => {
     const allow = config.telegram.allowedChatIds;
     if (allow.length && ctx.chat && !allow.includes(String(ctx.chat.id))) {
@@ -217,7 +254,13 @@ function registerHandlers(bot: Bot) {
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
     const chatId = ctx.chat!.id;
-    await ctx.answerCallbackQuery();
+    // این دو فقط «تأییدِ ظاهری» هستند. اگر آپدیت دوباره تحویل داده شده باشد
+    // یا دیر رسیده باشیم، تلگرام ۴۰۰ می‌دهد؛ نباید کل هندلر را بخواباند.
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* query قدیمی یا قبلاً پاسخ‌داده‌شده */
+    }
     try {
       await ctx.editMessageReplyMarkup();
     } catch {
