@@ -6,6 +6,7 @@ import {
   formatWorkerCard,
   formatActivitiesCard,
   formatIssuesReworkCard,
+  formatGapsCard,
 } from "./format";
 import {
   createProject,
@@ -23,6 +24,7 @@ import {
   setDayStatus,
   bumpRevision,
   listWorkers,
+  getDayConversation,
   saveRawMessage,
   getConversationState,
   setAwaitDate,
@@ -32,7 +34,11 @@ import {
 } from "@/db/queries";
 import { transcribeAudio } from "@/ai/extract";
 import { runExtraction } from "@/services/review";
-import { loadDaySummary } from "@/services/consolidate";
+import {
+  loadDaySummary,
+  deterministicGaps,
+  pendingGaps,
+} from "@/services/consolidate";
 import { buildDailyExcel, buildTableExcel } from "@/services/report-excel";
 import {
   REPORTS,
@@ -162,6 +168,7 @@ function registerHandlers(bot: Bot) {
     if (!day) return await ctx.reply(MSG.noOpenDay(project.name));
     await ctx.reply(MSG.processing);
     const res = await runExtraction(project.id, day.id);
+    if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
     await ctx.reply(formatDaySummary(day, res.summary));
   });
 
@@ -483,6 +490,15 @@ async function routeMessage(
 
 async function startDayForDate(ctx: Context, project: Project, j: JalaliInfo) {
   const chatId = ctx.chat!.id;
+  // مرورِ نیمه‌تمام را رها کن ولی آن روز را باز بگذار، وگرنه در وضعیت
+  // «review» گیر می‌کند و دیگر در «پایان روز همه» هم دیده نمی‌شود.
+  const prev = await getConversationState(chatId);
+  if (prev?.workDayId && (prev.phase === "cards" || prev.phase === "card_edit")) {
+    await setDayStatus(prev.workDayId, "open");
+  }
+  // فازِ «منتظر تاریخ» باید همین‌جا بسته شود؛ وگرنه پیام‌های بعدیِ کاربر
+  // دوباره به‌عنوان تاریخ خوانده می‌شوند و هیچ گزارشی ذخیره نمی‌شود.
+  await clearConversationState(chatId);
   const existing = await getWorkDayByDate(project.id, j.key);
   if (existing) {
     if (existing.status !== "open") await setDayStatus(existing.id, "open");
@@ -500,8 +516,16 @@ async function startDayForDate(ctx: Context, project: Project, j: JalaliInfo) {
 
 /** شروع مرور کارتی */
 async function beginReview(bot: Bot, ctx: Context, project: Project, day: WorkDay) {
+  // روزِ بی‌پیام نباید بی‌صدا به یک گزارش خالی تبدیل شود
+  const conversation = await getDayConversation(day.id);
+  if (!conversation.trim()) {
+    await ctx.reply(MSG.emptyDay(day.dateLabel));
+    return;
+  }
+
   await ctx.reply(MSG.processing);
-  await runExtraction(project.id, day.id); // استخراج اولیه
+  const res = await runExtraction(project.id, day.id); // استخراج اولیه
+  if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
   await setDayStatus(day.id, "review");
   await setCards(ctx.chat!.id, day.id);
   await ctx.reply(
@@ -543,6 +567,21 @@ async function showCard(
         "\n\nموانع یا دوباره‌کاری‌ای برای اضافه/اصلاح هست؟",
       { reply_markup: kb },
     );
+  } else if (index === W + 2) {
+    // آخرین ایست: نواقصی که هنوز باقی مانده‌اند (جز آن‌ها که همین مرور اصلاح شدند)
+    const st = await getConversationState(ctx.chat!.id);
+    const gaps = pendingGaps(
+      deterministicGaps(s),
+      st?.cardState?.changes ?? [],
+    );
+    if (!gaps.length) {
+      await finalizeFromCards(bot, ctx, project, workDayId);
+      return;
+    }
+    const kb = new InlineKeyboard()
+      .text("✏️ تکمیل", "card:edit")
+      .text("✅ ثبت با همین نواقص", "card:force");
+    await ctx.reply(formatGapsCard(gaps), { reply_markup: kb });
   } else {
     await finalizeFromCards(bot, ctx, project, workDayId);
   }
@@ -574,9 +613,16 @@ async function handleCardCallback(bot: Bot, ctx: Context, data: string) {
     let target = "گزارش";
     if (cs.index < W) target = s.attendance[cs.index].name;
     else if (cs.index === W) target = "فعالیت‌ها";
-    else target = "موانع و دوباره‌کاری";
+    else if (cs.index === W + 1) target = "موانع و دوباره‌کاری";
+    else target = "تکمیل نواقص";
     await updateCardState(chatId, { editTarget: target }, "card_edit");
     await ctx.reply(`✏️ چی رو برای «${target}» عوض کنم؟ (متن یا ویس بفرست)`);
+    return;
+  }
+
+  // ثبت نهایی با پذیرفتنِ نواقصِ باقی‌مانده
+  if (data === "card:force") {
+    await finalizeFromCards(bot, ctx, project, state.workDayId);
     return;
   }
 
@@ -607,10 +653,11 @@ async function finalizeFromCards(
   await ctx.reply("⏳ در حال اعمال تغییرات و ساخت گزارش نهایی…");
 
   if (cs && (cs.changes.length || cs.deletions.length)) {
-    await runExtraction(project.id, workDayId, {
+    const res = await runExtraction(project.id, workDayId, {
       changes: cs.changes,
       deletions: cs.deletions,
     });
+    if (res.aiFailed) await ctx.reply(MSG.aiChangesFailed);
   }
 
   const day = await getWorkDayById(workDayId);

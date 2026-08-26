@@ -8,6 +8,11 @@ import { humanDuration } from "@/services/attendance-calc";
 import { toFaDigits } from "@/lib/jalali";
 import type { WorkDay } from "@/db/schema";
 
+/** مدت‌زمان با ارقام فارسی، هم‌شکل با بقیه‌ی متن‌های بات */
+function dur(minutes: number): string {
+  return toFaDigits(humanDuration(minutes));
+}
+
 /** کارت یک نیرو برای مرور پایان روز */
 export function formatWorkerCard(
   a: AttendanceRow,
@@ -23,11 +28,9 @@ export function formatWorkerCard(
     a.dayFraction >= 1
       ? "۱ روز کامل"
       : a.workedMinutes
-        ? humanDuration(a.workedMinutes)
+        ? dur(a.workedMinutes)
         : "—";
-  const ot = a.overtimeMinutes
-    ? ` (+${humanDuration(a.overtimeMinutes)} اضافه‌کاری)`
-    : "";
+  const ot = a.overtimeMinutes ? ` (+${dur(a.overtimeMinutes)} اضافه‌کاری)` : "";
   const acts =
     a.assignedActivityMinutes || a.hasActivity ? "" : "\n⚠️ بدون فعالیت ثبت‌شده";
   return (
@@ -70,6 +73,20 @@ export function formatIssuesReworkCard(s: DaySummary): string {
   }
   if (!parts.length) parts.push("موانع یا دوباره‌کاری‌ای ثبت نشده.");
   return parts.join("\n");
+}
+
+/**
+ * کارت پایانیِ نواقص: هرچه هنوز کم است، پیش از ثبت نهایی یک‌جا نشان داده می‌شود
+ * تا نیرویی بدون فعالیت یا بدون ساعت در گزارش نماند.
+ */
+export function formatGapsCard(gaps: string[]): string {
+  const lines = gaps.map((q, i) => `${toFaDigits(i + 1)}. ${q}`);
+  return (
+    `📝 چند مورد هنوز کامل نیست (${toFaDigits(gaps.length)}):\n\n` +
+    lines.join("\n") +
+    "\n\n«✏️ تکمیل» را بزن و همه را در یک پیام (متن یا ویس) جواب بده،\n" +
+    "یا «✅ ثبت با همین نواقص» را بزن تا گزارش همین‌طور نهایی شود."
+  );
 }
 
 /** خلاصه‌ی «چه چیزی فهمیدم» برای بازخورد آنیِ بعد از هر پیام */
@@ -119,20 +136,18 @@ export function formatDaySummary(day: WorkDay, s: DaySummary): string {
   parts.push(`👷 نیروها (${toFaDigits(s.workerCount)} نفر):`);
   if (s.attendance.length) {
     for (const a of s.attendance) {
-      const dur =
+      const worked =
         a.dayFraction >= 1
           ? "۱ روز کامل"
           : a.workedMinutes
-            ? humanDuration(a.workedMinutes)
+            ? dur(a.workedMinutes)
             : "—";
-      const ot = a.overtimeMinutes
-        ? ` + ${humanDuration(a.overtimeMinutes)} اضافه‌کاری`
-        : "";
+      const ot = a.overtimeMinutes ? ` + ${dur(a.overtimeMinutes)} اضافه‌کاری` : "";
       const hours =
         a.entry && a.exit
           ? ` [${toFaDigits(a.entry)}–${toFaDigits(a.exit)}]`
           : "";
-      parts.push(`• ${a.name}: ${dur}${ot}${hours}`);
+      parts.push(`• ${a.name}: ${worked}${ot}${hours}`);
     }
   } else {
     parts.push("—");
@@ -145,10 +160,11 @@ export function formatDaySummary(day: WorkDay, s: DaySummary): string {
       const time = a.isFullDay
         ? " (تمام‌روز)"
         : a.startTime && a.endTime
-          ? ` (${a.startTime}–${a.endTime})`
+          ? ` (${toFaDigits(a.startTime)}–${toFaDigits(a.endTime)})`
           : "";
+      const who = a.workers.length ? `\n   👥 ${a.workers.join("، ")}` : "";
       parts.push(
-        `• ${a.workFront ? a.workFront + " — " : ""}${a.description}${time}`,
+        `• ${a.workFront ? a.workFront + " — " : ""}${a.description}${time}${who}`,
       );
     }
   }

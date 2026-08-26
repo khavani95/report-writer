@@ -68,7 +68,13 @@ export async function setActiveProject(chatId: number, projectId: number) {
     .values({ chatId, activeProjectId: projectId, phase: "idle" })
     .onConflictDoUpdate({
       target: conversationState.chatId,
-      set: { activeProjectId: projectId, updatedAt: new Date() },
+      // با عوض‌کردن پروژه، هر جریانِ نیمه‌تمام (انتظار تاریخ، مرور کارتی) رها می‌شود
+      set: {
+        activeProjectId: projectId,
+        phase: "idle",
+        cardState: null,
+        updatedAt: new Date(),
+      },
     });
 }
 
