@@ -302,6 +302,21 @@ export async function saveRawMessage(data: {
   telegramFileId?: string;
 }) {
   const db = getDb();
+  // تلگرام در صورت کندیِ پاسخ همان آپدیت را دوباره می‌فرستد؛ بدون این بررسی
+  // یک پیام دوبار ذخیره می‌شود و در تحلیلِ روز دوبار به حساب می‌آید.
+  if (data.telegramMessageId) {
+    const dup = await db
+      .select({ id: rawMessages.id })
+      .from(rawMessages)
+      .where(
+        and(
+          eq(rawMessages.workDayId, data.workDayId),
+          eq(rawMessages.telegramMessageId, data.telegramMessageId),
+        ),
+      )
+      .limit(1);
+    if (dup.length) return null;
+  }
   const inserted = await db.insert(rawMessages).values(data).returning();
   return inserted[0];
 }

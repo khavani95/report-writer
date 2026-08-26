@@ -149,12 +149,15 @@ export async function writeDayData(
     if (!byId.has(worker.id)) add(worker, {});
   }
 
-  // به‌روزرسانی پروفایل نیروها
+  // به‌روزرسانی پروفایل نیروها (با پاک‌سازی تخصص/نوع همکاری)
   for (const rec of byId.values()) {
+    const { trade, employmentType } = cleanProfile(rec.trade, rec.emp);
+    rec.trade = trade;
+    rec.emp = employmentType;
     const patch: Record<string, unknown> = {};
-    if (rec.trade) patch.trade = rec.trade;
-    if (rec.emp) patch.employmentType = rec.emp;
-    if (rec.trade && rec.emp) patch.profileStatus = "complete";
+    if (trade) patch.trade = trade;
+    if (employmentType) patch.employmentType = employmentType;
+    if (trade && employmentType) patch.profileStatus = "complete";
     if (Object.keys(patch).length) {
       await db.update(workers).set(patch).where(eq(workers.id, rec.worker.id));
     }
@@ -271,6 +274,51 @@ export function deterministicGaps(summary: DaySummary): string[] {
     }
   }
   return q;
+}
+
+const EMPLOYMENT = ["روزمزد", "پیمانکار"];
+
+/**
+ * تفکیک و پاک‌سازیِ تخصص و نوع همکاری.
+ * مدل گاهی همه‌چیز را در یک رشته می‌ریزد («برقکار پورسانتی/روزمزد/برقکار»)
+ * و چون این مقدار هر بار روی پروفایل نوشته می‌شود، آشغال انباشته می‌شود.
+ * اینجا بخش‌ها جدا، تکراری‌ها و زیرمجموعه‌ها حذف، و نوع همکاری بیرون کشیده می‌شود.
+ */
+export function cleanProfile(
+  rawTrade?: string | null,
+  rawEmp?: string | null,
+): { trade?: string; employmentType?: string } {
+  const parts = [rawTrade ?? "", rawEmp ?? ""]
+    .join("/")
+    .split(/[/،,|]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  let employmentType: string | undefined;
+  const trades: string[] = [];
+  for (const p of parts) {
+    const emp = EMPLOYMENT.find((e) => p === e);
+    if (emp) {
+      employmentType ??= emp;
+      continue;
+    }
+    // «برقکار روزمزد» → تخصص «برقکار» + نوع همکاری «روزمزد»
+    const inline = EMPLOYMENT.find((e) => p.endsWith(` ${e}`));
+    if (inline) {
+      employmentType ??= inline;
+      const rest = p.slice(0, -inline.length).trim();
+      if (rest) trades.push(rest);
+      continue;
+    }
+    trades.push(p);
+  }
+
+  // حذف بخش‌هایی که درون بخش دیگری تکرار شده‌اند («برقکار» داخل «برقکار پورسانتی»)
+  const unique = trades.filter(
+    (t, i) => !trades.some((o, j) => j !== i && o !== t && o.includes(t)),
+  );
+  const trade = [...new Set(unique)].join("، ").slice(0, 60);
+  return { trade: trade || undefined, employmentType };
 }
 
 /**

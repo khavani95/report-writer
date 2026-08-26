@@ -1,8 +1,7 @@
 import { Type } from "@google/genai";
-import { getGemini } from "./gemini";
+import { generateWithRetry } from "./gemini";
 import { extractionResponseSchema, type ExtractedEventItem } from "./schema";
 import { extractAttendanceFromText } from "./attendance-fallback";
-import { config } from "@/lib/config";
 
 const SYSTEM_INSTRUCTION = `تو دستیار ثبت گزارش روزانه‌ی یک کارگاه ساختمانی هستی.
 از پیام (متنی یا صوتی) سرکارگر، همه‌ی داده‌ها را استخراج و در آرایه‌ی events برمی‌گردانی.
@@ -101,25 +100,13 @@ async function aiExtractText(
       : "";
 
   try {
-    const ai = getGemini();
-    const response = await ai.models.generateContent({
-      model: config.gemini.model,
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: `پیام سرکارگر:\n${text}${knownList}` }],
-        },
-      ],
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        responseMimeType: "application/json",
-        responseSchema: extractionResponseSchema,
-        temperature: 0,
-      },
+    const raw = await generateWithRetry({
+      systemInstruction: SYSTEM_INSTRUCTION,
+      responseSchema: extractionResponseSchema,
+      temperature: 0,
+      parts: [{ text: `پیام سرکارگر:\n${text}${knownList}` }],
     });
-    const parsed = JSON.parse(response.text ?? "{}") as {
-      events?: ExtractedEventItem[];
-    };
+    const parsed = JSON.parse(raw) as { events?: ExtractedEventItem[] };
     return parsed.events ?? [];
   } catch (e) {
     // خطای API (سهمیه/شبکه) نباید کل پیام را خراب کند؛ پارسر قطعی جبران می‌کند
@@ -166,23 +153,19 @@ export async function transcribeAudio(
   mimeType = "audio/ogg",
 ): Promise<string> {
   try {
-    const ai = getGemini();
-    const response = await ai.models.generateContent({
-      model: config.gemini.model,
-      contents: [
+    // با تلاش دوباره: یک خطای گذرای ۵۰۳ نباید کل ویس را از بین ببرد
+    const text = await generateWithRetry({
+      systemInstruction:
+        "تو رونویسِ دقیق پیام‌های صوتی فارسیِ کارگاه ساختمانی هستی.",
+      temperature: 0,
+      parts: [
+        { inlineData: { mimeType, data: audioBase64 } },
         {
-          role: "user",
-          parts: [
-            { inlineData: { mimeType, data: audioBase64 } },
-            {
-              text: "این پیام صوتی فارسی را دقیق و کلمه‌به‌کلمه به متن فارسی تبدیل کن. فقط متن را برگردان.",
-            },
-          ],
+          text: "این پیام صوتی فارسی را دقیق و کلمه‌به‌کلمه به متن فارسی تبدیل کن. فقط متن را برگردان.",
         },
       ],
-      config: { temperature: 0 },
     });
-    return (response.text ?? "").trim();
+    return text.trim();
   } catch (e) {
     console.error("transcribeAudio failed:", e);
     return "";
@@ -199,17 +182,14 @@ async function parseWithSchema<T>(
   schema: Record<string, unknown>,
 ): Promise<T> {
   try {
-    const ai = getGemini();
-    const response = await ai.models.generateContent({
-      model: config.gemini.model,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        temperature: 0,
-      },
+    const text = await generateWithRetry({
+      systemInstruction:
+        "تو دستیار استخراج داده‌ی ساختاریافته از متن فارسیِ کارگاه ساختمانی هستی.",
+      responseSchema: schema,
+      temperature: 0,
+      parts: [{ text: prompt }],
     });
-    return JSON.parse(response.text ?? "{}") as T;
+    return JSON.parse(text) as T;
   } catch (e) {
     console.error("parseWithSchema failed:", e);
     return {} as T;

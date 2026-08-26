@@ -156,6 +156,16 @@ function registerHandlers(bot: Bot) {
   bot.hears(BTN.endDay, async (ctx) => {
     const project = await getActiveProject(ctx.chat.id);
     if (!project) return await ctx.reply(MSG.selectProjectFirst);
+
+    // مرورِ در جریان: روز در وضعیت «review» است، پس getOpenWorkDay آن را
+    // پیدا نمی‌کند. به‌جای «روزی باز نیست»، همان کارت را دوباره نشان بده.
+    const st = await getConversationState(ctx.chat.id);
+    if (st?.workDayId && (st.phase === "cards" || st.phase === "card_edit")) {
+      await ctx.reply(MSG.reviewInProgress);
+      await showCard(bot, ctx, project, st.workDayId, st.cardState?.index ?? 0);
+      return;
+    }
+
     const day = await getOpenWorkDay(project.id);
     if (!day) return await ctx.reply(MSG.noOpenDay(project.name));
     await beginReview(bot, ctx, project, day);
@@ -526,6 +536,7 @@ async function beginReview(bot: Bot, ctx: Context, project: Project, day: WorkDa
   await ctx.reply(MSG.processing);
   const res = await runExtraction(project.id, day.id); // استخراج اولیه
   if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
+  else if (res.aiIncomplete) await ctx.reply(MSG.aiIncomplete);
   await setDayStatus(day.id, "review");
   await setCards(ctx.chat!.id, day.id);
   await ctx.reply(
