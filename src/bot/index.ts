@@ -28,6 +28,7 @@ import {
   saveRawMessage,
   getConversationState,
   claimUpdate,
+  setBusy,
   setAwaitDate,
   setCards,
   updateCardState,
@@ -39,6 +40,7 @@ import {
   loadDaySummary,
   deterministicGaps,
   pendingGaps,
+  type DaySummary,
 } from "@/services/consolidate";
 import { buildDailyExcel, buildTableExcel } from "@/services/report-excel";
 import {
@@ -194,9 +196,12 @@ function registerHandlers(bot: Bot) {
     const project = await getActiveProject(ctx.chat.id);
     if (!project) return await ctx.reply(MSG.selectProjectFirst);
 
+    const st = await getConversationState(ctx.chat.id);
+    // پردازشِ در جریان: فشردن دوباره‌ی دکمه نباید کارِ سنگینِ موازی راه بیندازد
+    if (isBusy(st)) return await ctx.reply(MSG.busy);
+
     // مرورِ در جریان: روز در وضعیت «review» است، پس getOpenWorkDay آن را
     // پیدا نمی‌کند. به‌جای «روزی باز نیست»، همان کارت را دوباره نشان بده.
-    const st = await getConversationState(ctx.chat.id);
     if (st?.workDayId && (st.phase === "cards" || st.phase === "card_edit")) {
       await ctx.reply(MSG.reviewInProgress);
       await showCard(bot, ctx, project, st.workDayId, st.cardState?.index ?? 0);
@@ -567,6 +572,17 @@ async function startDayForDate(ctx: Context, project: Project, j: JalaliInfo) {
   );
 }
 
+/**
+ * آیا کارِ سنگینی همین حالا در جریان است؟
+ * نشانه پس از دو دقیقه کهنه تلقی می‌شود تا اگر تابع وسط کار کشته شد،
+ * کاربر برای همیشه پشت این محافظ گیر نکند.
+ */
+const BUSY_TTL_MS = 2 * 60 * 1000;
+function isBusy(st: { phase: string; updatedAt: Date } | null): boolean {
+  if (st?.phase !== "busy") return false;
+  return Date.now() - st.updatedAt.getTime() < BUSY_TTL_MS;
+}
+
 /** شروع مرور کارتی */
 async function beginReview(bot: Bot, ctx: Context, project: Project, day: WorkDay) {
   // روزِ بی‌پیام نباید بی‌صدا به یک گزارش خالی تبدیل شود
@@ -576,17 +592,23 @@ async function beginReview(bot: Bot, ctx: Context, project: Project, day: WorkDa
     return;
   }
 
+  // پیش از کار سنگین علامت بزن، تا فشردن دوباره‌ی دکمه کارِ موازی نسازد
+  await setBusy(ctx.chat!.id, day.id);
   await ctx.reply(MSG.processing);
+
   const res = await runExtraction(project.id, day.id); // استخراج اولیه
   if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
   else if (res.aiIncomplete) await ctx.reply(MSG.aiIncomplete);
-  await setDayStatus(day.id, "review");
-  await setCards(ctx.chat!.id, day.id);
+  await Promise.all([
+    setDayStatus(day.id, "review"),
+    setCards(ctx.chat!.id, day.id),
+  ]);
   await ctx.reply(
     `📋 مرور گزارش «${project.name}» — ${day.dateLabel}\n` +
       "هر کارت را تأیید، تغییر یا حذف کن. تغییرها آخر یکجا اعمال می‌شوند.",
   );
-  await showCard(bot, ctx, project, day.id, 0);
+  // خلاصه همین الان خوانده شده؛ دوباره از دیتابیس نمی‌گیریم
+  await showCard(bot, ctx, project, day.id, 0, res.summary);
 }
 
 /** نمایش کارت شماره‌ی index */
@@ -596,8 +618,9 @@ async function showCard(
   project: Project,
   workDayId: number,
   index: number,
+  preloaded?: DaySummary,
 ) {
-  const s = await loadDaySummary(workDayId);
+  const s = preloaded ?? (await loadDaySummary(workDayId));
   const W = s.attendance.length;
 
   if (index < W) {

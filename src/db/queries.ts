@@ -660,3 +660,16 @@ export async function pruneProcessedUpdates(): Promise<void> {
     console.error("[pruneProcessedUpdates] failed:", e);
   }
 }
+
+/**
+ * نشانه‌گذاری «در حال پردازش» پیش از کار سنگینِ پایان روز.
+ * تا وقتی این فاز برقرار است، فشردن دوباره‌ی «پایان روز» کارِ موازی
+ * راه نمی‌اندازد. با `setCards` یا هر فاز بعدی خودبه‌خود برداشته می‌شود.
+ */
+export async function setBusy(chatId: number, workDayId: number) {
+  const db = getDb();
+  await db
+    .update(conversationState)
+    .set({ phase: "busy", workDayId, updatedAt: new Date() })
+    .where(eq(conversationState.chatId, chatId));
+}
