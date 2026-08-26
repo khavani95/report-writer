@@ -29,6 +29,21 @@ export const config = {
       return required("GEMINI_API_KEY");
     },
     model: process.env.GEMINI_MODEL || "gemini-flash-latest",
+    /**
+     * زنجیره‌ی مدل‌های پشتیبان برای وقتی مدل اصلی با ۵۰۳ («تحت فشار زیاد»)
+     * جواب نمی‌دهد؛ مدل سبک‌تر معمولاً ظرفیت آزادتری دارد.
+     * نامِ نامعتبر خطای غیرقابل‌تکرار می‌دهد و بی‌درنگ رد می‌شود، پس چند
+     * گزینه پشت‌سرهم می‌آید تا تغییرِ نام‌گذاری گوگل ما را زمین نزند.
+     */
+    get fallbackModels(): string[] {
+      const raw =
+        process.env.GEMINI_FALLBACK_MODEL ||
+        "gemini-flash-lite-latest,gemini-3.5-flash-lite";
+      return raw
+        .split(",")
+        .map((m) => m.trim())
+        .filter(Boolean);
+    },
   },
   db: {
     get url() {

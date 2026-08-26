@@ -1,8 +1,7 @@
 import { Type } from "@google/genai";
-import { getGemini } from "./gemini";
+import { generateWithRetry } from "./gemini";
 import { extractAttendanceFromText } from "./attendance-fallback";
 import { findWorkerMatch } from "@/lib/text-normalize";
-import { config } from "@/lib/config";
 
 export interface DayWorker {
   name: string;
@@ -46,6 +45,11 @@ export interface DayExtraction {
    * موانع و دوباره‌کاری‌ها معتبر نیستند؛ نباید داده‌ی قبلی را با آن‌ها بازنویسی کرد.
    */
   aiFailed: boolean;
+  /**
+   * پاسخ آمد ولی ناقص بود: پارسر قطعی نیروهایی را یافت که در خروجی AI نبودند.
+   * چنین پاسخی قابل اتکا نیست و نباید داده‌ی ثبت‌شده را پاک کند.
+   */
+  aiIncomplete: boolean;
 }
 
 const SYSTEM = `تو دستیار تهیه‌ی «گزارش روزانه‌ی کارگاه ساختمانی» هستی.
@@ -154,29 +158,24 @@ export async function extractDay(
   conversation: string,
   knownWorkers: string[] = [],
 ): Promise<DayExtraction> {
-  let ai: DayExtraction = { data: EMPTY, questions: [], aiFailed: true };
+  let ai: DayExtraction = {
+    data: EMPTY,
+    questions: [],
+    aiFailed: true,
+    aiIncomplete: false,
+  };
 
   try {
-    const client = getGemini();
     const known = knownWorkers.length
       ? `\n\nنیروهای شناخته‌شده‌ی کارگاه: ${knownWorkers.join("، ")}.`
       : "";
-    const res = await client.models.generateContent({
-      model: config.gemini.model,
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: `مکالمه‌ی کل روز:\n${conversation}${known}` }],
-        },
-      ],
-      config: {
-        systemInstruction: SYSTEM,
-        responseMimeType: "application/json",
-        responseSchema: daySchema,
-        temperature: 0,
-      },
+    const text = await generateWithRetry({
+      systemInstruction: SYSTEM,
+      responseSchema: daySchema,
+      temperature: 0,
+      parts: [{ text: `مکالمه‌ی کل روز:\n${conversation}${known}` }],
     });
-    const parsed = JSON.parse(res.text ?? "{}") as Partial<DayData> & {
+    const parsed = JSON.parse(text) as Partial<DayData> & {
       questions?: string[];
     };
     ai = {
@@ -188,25 +187,39 @@ export async function extractDay(
       },
       questions: parsed.questions ?? [],
       aiFailed: false,
+      aiIncomplete: false,
     };
   } catch (e) {
     console.error("extractDay AI failed:", e);
   }
 
   // ادغام پارسر قطعی ورود/خروج (ستون فقرات مطمئن)
-  mergeDeterministicAttendance(ai.data, conversation);
+  const added = mergeDeterministicAttendance(ai.data, conversation);
+  if (added && !ai.aiFailed) {
+    console.warn(`[extractDay] پاسخ AI ناقص بود؛ ${added} نیرو از متن اضافه شد.`);
+    ai.aiIncomplete = true;
+  }
   return ai;
 }
 
 /**
- * ورود/خروج قطعی را روی داده‌ی AI سوار می‌کند.
- * اگر AI نیرو داده باشد، پارسر قطعی فقط ساعت‌های نیروهای موجود را پر می‌کند
- * (نیروی جدید نمی‌سازد) تا نامِ کوچک باعث تکرارِ نفر نشود.
- * فقط اگر AI هیچ نیرویی نداده (مثلاً خطای سهمیه)، به‌عنوان شبکه‌ی ایمنی می‌سازد.
+ * ورود/خروج قطعی را روی داده‌ی AI سوار می‌کند و تعداد نیروهای «افزوده‌شده»
+ * را برمی‌گرداند.
+ *
+ * هر نامی که در متن فعلِ ورود/خروج و ساعت دارد باید در گزارش بیاید — حتی اگر
+ * AI جا انداخته باشد. پیش‌تر وقتی AI دستِ‌کم یک نیرو برمی‌گرداند، بقیه نادیده
+ * گرفته می‌شدند؛ نتیجه این بود که یک پاسخِ ناقص (مثلاً فقط ۱ نفر از ۴ نفر)
+ * سه نیرو را بی‌صدا از گزارش حذف می‌کرد.
+ *
+ * خطر نفر تکراری کم است: هم اینجا با findWorkerMatch تطبیق داده می‌شود و هم
+ * بعداً resolveWorker همان نام را به نیروی موجودِ دیتابیس نگاشت می‌کند.
  */
-function mergeDeterministicAttendance(data: DayData, conversation: string) {
+function mergeDeterministicAttendance(
+  data: DayData,
+  conversation: string,
+): number {
   const events = extractAttendanceFromText(conversation);
-  const aiHadWorkers = data.workers.length > 0;
+  let added = 0;
   for (const ev of events) {
     const name = (ev.workerName || "").trim();
     if (!name || !ev.time) continue;
@@ -218,13 +231,14 @@ function mergeDeterministicAttendance(data: DayData, conversation: string) {
       const w = data.workers[idx];
       if (ev.event === "ورود" && !w.entry) w.entry = ev.time;
       if (ev.event === "خروج" && !w.exit) w.exit = ev.time;
-    } else if (!aiHadWorkers) {
-      data.workers.push({
-        name,
-        entry: ev.event === "ورود" ? ev.time : undefined,
-        exit: ev.event === "خروج" ? ev.time : undefined,
-      });
+      continue;
     }
-    // در غیر این صورت رد می‌کنیم تا نفر تکراری ساخته نشود
+    data.workers.push({
+      name,
+      entry: ev.event === "ورود" ? ev.time : undefined,
+      exit: ev.event === "خروج" ? ev.time : undefined,
+    });
+    added += 1;
   }
+  return added;
 }

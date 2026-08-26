@@ -14,6 +14,8 @@ export interface ReviewResult {
   complete: boolean;
   /** سرویس هوش مصنوعی پاسخ نداد؛ فقط ورود/خروجِ قطعی استخراج شد */
   aiFailed: boolean;
+  /** پاسخ آمد ولی نیرو جا انداخته بود؛ از روی متن تکمیل شد */
+  aiIncomplete: boolean;
 }
 
 /**
@@ -42,7 +44,7 @@ export async function runExtraction(
       "]";
   }
 
-  const { data, aiFailed } = await extractDay(convo, known);
+  const { data, aiFailed, aiIncomplete } = await extractDay(convo, known);
 
   // حذف قطعی نیروهای حذف‌شده (چه از فهرست نیروها، چه از فعالیت‌ها)
   if (deletions.length) {
@@ -56,12 +58,24 @@ export async function runExtraction(
     }
   }
 
-  // با شکست AI، فعالیت‌ها/موانع/دوباره‌کاری‌های ثبت‌شده دست‌نخورده می‌مانند
-  await writeDayData(projectId, workDayId, data, { keepNonAttendance: aiFailed });
+  // پاسخِ شکست‌خورده یا ناقص فقط اجازه‌ی «افزودن» دارد، نه پاک‌کردن:
+  // اگر چنین پاسخی هیچ فعالیت/مانع/دوباره‌کاری نیاورد، موارد ثبت‌شده می‌مانند.
+  const untrusted = aiFailed || aiIncomplete;
+  const broughtNothing =
+    !data.activities.length && !data.issues.length && !data.reworks.length;
+  await writeDayData(projectId, workDayId, data, {
+    keepNonAttendance: untrusted && broughtNothing,
+  });
 
   const summary = await loadDaySummary(workDayId);
   const questions = deterministicGaps(summary);
-  return { summary, questions, complete: questions.length === 0, aiFailed };
+  return {
+    summary,
+    questions,
+    complete: questions.length === 0,
+    aiFailed,
+    aiIncomplete,
+  };
 }
 
 /** فقط وضعیت فعلی را از دیتابیس می‌خواند (بدون فراخوانی AI) */
@@ -73,5 +87,6 @@ export async function currentGaps(workDayId: number): Promise<ReviewResult> {
     questions,
     complete: questions.length === 0,
     aiFailed: false,
+    aiIncomplete: false,
   };
 }
