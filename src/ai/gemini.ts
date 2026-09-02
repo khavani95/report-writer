@@ -15,7 +15,20 @@ export function getGemini(): GoogleGenAI {
  * و با یک تلاش دوباره‌ی کوتاه معمولاً حل می‌شود؛ بدون retry یک خطای لحظه‌ای
  * کل تحلیل روز را از بین می‌برد.
  */
-const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE = new Set([500, 502, 503, 504]);
+
+/**
+ * ۴۲۹ یعنی سهمیه/نرخ پر شده. تلاش دوباره روی همان مدل تقریباً همیشه
+ * بی‌فایده است؛ بلافاصله به مدل بعدی می‌رویم.
+ */
+const QUOTA = 429;
+
+/**
+ * سقف کل زمانِ هوش مصنوعی. بودجه‌ی وبهوک ۵۵ ثانیه است و بعد از این
+ * فراخوانی هنوز باید داده نوشته و کارت‌ها فرستاده شوند؛ پس تحلیل هرگز
+ * نباید بیش از این طول بکشد. با رسیدن به مهلت، پارسر قطعی کار را ادامه می‌دهد.
+ */
+const TOTAL_BUDGET_MS = 20_000;
 
 /**
  * فاصله‌ی بین تلاش‌ها (میلی‌ثانیه) — ۳ تلاش برای هر مدل.
@@ -61,9 +74,14 @@ export async function generateWithRetry(
   ];
 
   let lastError: unknown = new Error("gemini: هیچ تلاشی انجام نشد");
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
 
   for (const model of models) {
     for (let attempt = 0; attempt <= BACKOFF_MS.length; attempt++) {
+      if (Date.now() >= deadline) {
+        console.warn("[gemini] مهلت کلی تمام شد؛ ادامه بدون هوش مصنوعی.");
+        throw lastError;
+      }
       try {
         const res = await client.models.generateContent({
           model,
@@ -88,8 +106,14 @@ export async function generateWithRetry(
       } catch (e) {
         lastError = e;
         const status = statusOf(e);
+        if (status === QUOTA) {
+          console.warn(`[gemini] ${model} سهمیه پر است (۴۲۹)؛ مدل بعدی.`);
+          break;
+        }
         const canRetry = status === null || RETRYABLE.has(status);
         if (!canRetry || attempt === BACKOFF_MS.length) break;
+        // اگر فرصتِ باقی‌مانده کمتر از فاصله‌ی انتظار است، وقت تلف نکن
+        if (Date.now() + BACKOFF_MS[attempt] >= deadline) break;
         console.warn(
           `[gemini] ${model} خطای گذرا (${status ?? "نامشخص"})؛ تلاش ${attempt + 2}…`,
         );

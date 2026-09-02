@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   attendance,
@@ -9,7 +9,8 @@ import {
   workers,
   type Worker,
 } from "@/db/schema";
-import { resolveWorker } from "@/db/queries";
+import { listWorkers } from "@/db/queries";
+import { findWorkerMatch } from "@/lib/text-normalize";
 import { calcWork, timeToMinutes } from "./attendance-calc";
 import { workRules } from "@/lib/config";
 import type { DayData } from "@/ai/day";
@@ -73,33 +74,55 @@ export async function writeDayData(
   const db = getDb();
   const keep = opts?.keepNonAttendance === true;
 
-  // پاک‌سازی نتایج قبلی
+  // ── پاک‌سازی نتایج قبلی ─────────────────────────────────────
+  // درایور HTTP نئون هر دستور را یک درخواست جداگانه می‌فرستد، پس تعداد
+  // رفت‌وبرگشت‌ها مستقیماً زمان پاسخ بات است. حذف پیوندهای فعالیت با یک
+  // زیرپرس‌وجو انجام می‌شود، نه یک DELETE به‌ازای هر فعالیت.
+  const cleanup: Array<Promise<unknown>> = [
+    db.delete(attendance).where(eq(attendance.workDayId, workDayId)),
+  ];
   if (!keep) {
-    const oldActs = await db
-      .select({ id: activities.id })
-      .from(activities)
-      .where(eq(activities.workDayId, workDayId));
-    for (const a of oldActs) {
-      await db
-        .delete(activityWorkers)
-        .where(eq(activityWorkers.activityId, a.id));
-    }
-    await db.delete(activities).where(eq(activities.workDayId, workDayId));
-    await db.delete(issues).where(eq(issues.workDayId, workDayId));
-    await db.delete(reworks).where(eq(reworks.workDayId, workDayId));
+    await db.delete(activityWorkers).where(
+      inArray(
+        activityWorkers.activityId,
+        db
+          .select({ id: activities.id })
+          .from(activities)
+          .where(eq(activities.workDayId, workDayId)),
+      ),
+    );
+    cleanup.push(
+      db.delete(activities).where(eq(activities.workDayId, workDayId)),
+      db.delete(issues).where(eq(issues.workDayId, workDayId)),
+      db.delete(reworks).where(eq(reworks.workDayId, workDayId)),
+    );
   }
-  await db.delete(attendance).where(eq(attendance.workDayId, workDayId));
+  await Promise.all(cleanup);
 
-  // کش تطبیق نام برای کاهش رفت‌وبرگشت به دیتابیس
+  // ── تطبیق نام‌ها: فهرست نیروهای پروژه فقط یک‌بار خوانده می‌شود ──
+  const roster = await listWorkers(projectId);
   const cache = new Map<string, Worker>();
-  const resolve = async (name: string): Promise<Worker> => {
-    const k = name.trim();
-    const hit = cache.get(k);
-    if (hit) return hit;
-    const w = await resolveWorker(projectId, k);
-    cache.set(k, w);
-    return w;
+  /** نیروهای تازه‌ای که باید ساخته شوند (یک‌جا درج می‌شوند) */
+  const pendingNew = new Map<string, { name: string; trade?: string }>();
+
+  const matchInRoster = (name: string): Worker | null => {
+    const idx = findWorkerMatch(
+      name,
+      roster.map((w) => [w.fullName, ...(w.aliases ?? [])]),
+    );
+    return idx >= 0 ? roster[idx] : null;
   };
+
+  /** نامی که باید شناخته شود؛ اگر در فهرست نبود در صف ساخت می‌رود */
+  const want = (name: string, trade?: string) => {
+    const k = name.trim();
+    if (!k || cache.has(k) || pendingNew.has(k)) return;
+    const found = matchInRoster(k);
+    if (found) cache.set(k, found);
+    else pendingNew.set(k, { name: k, trade });
+  };
+
+  const resolve = (name: string): Worker | null => cache.get(name.trim()) ?? null;
 
   // نیروها را بر اساس شناسه‌ی نهایی ادغام می‌کنیم (رفع نام‌های تکراری)
   const byId = new Map<
@@ -118,20 +141,6 @@ export async function writeDayData(
     byId.set(worker.id, cur);
   };
 
-  for (const w of data.workers) {
-    const name = (w.name ?? "").trim();
-    if (!name) continue;
-    if (w.trade) cache.delete(name); // تخصص جدید ممکن است
-    const worker = await resolveWorker(projectId, name, w.trade ?? undefined);
-    cache.set(name, worker);
-    add(worker, {
-      entry: w.entry ?? undefined,
-      exit: w.exit ?? undefined,
-      trade: w.trade ?? undefined,
-      emp: w.employmentType ?? undefined,
-    });
-  }
-
   // نیروهای داخل فعالیت‌ها هم اگر در فهرست کارکرد نبودند، حاضر محسوب شوند.
   // در حالت keep، فعالیت‌های نگه‌داشته‌شده‌ی دیتابیس مرجع‌اند نه داده‌ی ورودی.
   const activityNames = keep
@@ -142,29 +151,67 @@ export async function writeDayData(
           .where(eq(activities.workDayId, workDayId))
       ).flatMap((a) => a.names ?? [])
     : data.activities.flatMap((a) => a.workers ?? []);
-  for (const nm of activityNames) {
-    const clean = nm.trim();
-    if (!clean) continue;
-    const worker = await resolve(clean);
-    if (!byId.has(worker.id)) add(worker, {});
+
+  // همه‌ی نام‌ها یک‌جا تطبیق داده می‌شوند و نیروهای تازه با یک درج ساخته می‌شوند
+  for (const w of data.workers) want(w.name ?? "", w.trade ?? undefined);
+  for (const nm of activityNames) want(nm);
+  if (pendingNew.size) {
+    const created = await db
+      .insert(workers)
+      .values(
+        [...pendingNew.values()].map((n) => ({
+          projectId,
+          fullName: n.name,
+          aliases: [] as string[],
+          trade: n.trade ?? null,
+        })),
+      )
+      .returning();
+    for (const w of created) {
+      roster.push(w);
+      cache.set(w.fullName, w);
+    }
+    pendingNew.clear();
   }
 
-  // به‌روزرسانی پروفایل نیروها (با پاک‌سازی تخصص/نوع همکاری)
+  for (const w of data.workers) {
+    const worker = resolve(w.name ?? "");
+    if (!worker) continue;
+    add(worker, {
+      entry: w.entry ?? undefined,
+      exit: w.exit ?? undefined,
+      trade: w.trade ?? undefined,
+      emp: w.employmentType ?? undefined,
+    });
+  }
+  for (const nm of activityNames) {
+    const worker = resolve(nm);
+    if (worker && !byId.has(worker.id)) add(worker, {});
+  }
+
+  // به‌روزرسانی پروفایل نیروها — فقط آن‌هایی که واقعاً عوض شده‌اند
+  const profileUpdates: Array<Promise<unknown>> = [];
   for (const rec of byId.values()) {
     const { trade, employmentType } = cleanProfile(rec.trade, rec.emp);
     rec.trade = trade;
     rec.emp = employmentType;
     const patch: Record<string, unknown> = {};
-    if (trade) patch.trade = trade;
-    if (employmentType) patch.employmentType = employmentType;
-    if (trade && employmentType) patch.profileStatus = "complete";
+    if (trade && trade !== rec.worker.trade) patch.trade = trade;
+    if (employmentType && employmentType !== rec.worker.employmentType) {
+      patch.employmentType = employmentType;
+    }
+    if (trade && employmentType && rec.worker.profileStatus !== "complete") {
+      patch.profileStatus = "complete";
+    }
     if (Object.keys(patch).length) {
-      await db.update(workers).set(patch).where(eq(workers.id, rec.worker.id));
+      profileUpdates.push(
+        db.update(workers).set(patch).where(eq(workers.id, rec.worker.id)),
+      );
     }
   }
 
-  // ثبت کارکرد
-  for (const rec of byId.values()) {
+  // ثبت کارکرد — یک درج دسته‌ای برای همه‌ی نیروها
+  const attendanceRows = [...byId.values()].map((rec) => {
     let workedMinutes = 0;
     let overtimeMinutes = 0;
     let dayFraction = 0;
@@ -181,7 +228,7 @@ export async function writeDayData(
       dayFraction = 1;
       workedMinutes = workRules.standardWorkMinutes;
     }
-    await db.insert(attendance).values({
+    return {
       workDayId,
       workerId: rec.worker.id,
       entryTime: rec.entry ?? null,
@@ -190,61 +237,72 @@ export async function writeDayData(
       workedMinutes,
       dayFraction,
       overtimeMinutes,
-    });
-  }
+    };
+  });
+  await Promise.all([
+    ...profileUpdates,
+    ...(attendanceRows.length
+      ? [db.insert(attendance).values(attendanceRows)]
+      : []),
+  ]);
 
   // فعالیت‌ها/موانع/دوباره‌کاری‌های قبلی حفظ شده‌اند؛ چیزی بازنویسی نمی‌شود
   if (keep) return;
 
-  // ثبت فعالیت‌ها + نسبت‌دادن نفرات
-  for (const a of data.activities) {
-    const desc = (a.description ?? "").trim();
-    if (!desc) continue;
-    const names = (a.workers ?? []).map((x) => x.trim()).filter(Boolean);
-    const [ins] = await db
-      .insert(activities)
-      .values({
-        workDayId,
-        workFront: a.workFront ?? null,
-        activityType: a.activityType ?? null,
-        description: desc,
-        workerNames: names,
-        startTime: a.startTime ?? null,
-        endTime: a.endTime ?? null,
-        isFullDay: a.isFullDay ?? false,
-      })
-      .returning({ id: activities.id });
-    const seen = new Set<number>();
-    for (const nm of names) {
-      const worker = await resolve(nm);
-      if (seen.has(worker.id)) continue;
-      seen.add(worker.id);
-      await db
-        .insert(activityWorkers)
-        .values({ activityId: ins.id, workerId: worker.id });
-    }
-  }
+  // ── ثبت فعالیت‌ها، موانع و دوباره‌کاری‌ها ────────────────────
+  // هر بخش یک درج دسته‌ای است، نه یک درج به‌ازای هر ردیف.
+  const actRows = data.activities
+    .filter((a) => (a.description ?? "").trim())
+    .map((a) => ({
+      workDayId,
+      workFront: a.workFront ?? null,
+      activityType: a.activityType ?? null,
+      description: a.description.trim(),
+      workerNames: (a.workers ?? []).map((x) => x.trim()).filter(Boolean),
+      startTime: a.startTime ?? null,
+      endTime: a.endTime ?? null,
+      isFullDay: a.isFullDay ?? false,
+    }));
 
-  // موانع و دوباره‌کاری‌ها
-  for (const i of data.issues) {
-    if (!(i.description ?? "").trim()) continue;
-    await db.insert(issues).values({
+  const issueRows = data.issues
+    .filter((i) => (i.description ?? "").trim())
+    .map((i) => ({
       workDayId,
       type: i.type ?? "مشکل",
       description: i.description,
       impact: i.impact ?? null,
-    });
-  }
-  for (const r of data.reworks) {
-    if (!(r.description ?? "").trim()) continue;
-    await db.insert(reworks).values({
+    }));
+
+  const reworkRows = data.reworks
+    .filter((r) => (r.description ?? "").trim())
+    .map((r) => ({
       workDayId,
       workFront: r.workFront ?? null,
       amount: r.amount ?? null,
       cause: r.cause ?? null,
       description: r.description,
-    });
-  }
+    }));
+
+  const [inserted] = await Promise.all([
+    actRows.length
+      ? db.insert(activities).values(actRows).returning({ id: activities.id })
+      : Promise.resolve([] as Array<{ id: number }>),
+    issueRows.length ? db.insert(issues).values(issueRows) : null,
+    reworkRows.length ? db.insert(reworks).values(reworkRows) : null,
+  ]);
+
+  // پیوند فعالیت↔نیرو، همه با یک درج
+  const links: Array<{ activityId: number; workerId: number }> = [];
+  inserted.forEach((row, i) => {
+    const seen = new Set<number>();
+    for (const nm of actRows[i].workerNames) {
+      const worker = resolve(nm);
+      if (!worker || seen.has(worker.id)) continue;
+      seen.add(worker.id);
+      links.push({ activityId: row.id, workerId: worker.id });
+    }
+  });
+  if (links.length) await db.insert(activityWorkers).values(links);
 }
 
 /**
