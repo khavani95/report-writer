@@ -34,7 +34,10 @@ async function main() {
     body: JSON.stringify({
       url: webhookUrl,
       secret_token: secret || undefined,
-      allowed_updates: ["message"],
+      // ⚠️ بدون callback_query هیچ‌کدام از دکمه‌های شیشه‌ای کار نمی‌کنند:
+      // انتخاب پروژه، انتخاب تاریخ، مرور کارتی، منوی گزارش‌ها و تقویم تعطیلات.
+      // تلگرام آن‌ها را بی‌صدا دور می‌ریزد و هیچ خطایی هم دیده نمی‌شود.
+      allowed_updates: ["message", "callback_query"],
       drop_pending_updates: true,
     }),
   });

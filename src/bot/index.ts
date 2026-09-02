@@ -1,5 +1,6 @@
 import { Bot, InputFile, InlineKeyboard, type Context } from "grammy";
 import { config } from "@/lib/config";
+import { describeError } from "@/lib/log";
 import { BTN, MSG, homeKeyboard, projectKeyboard } from "./text";
 import {
   formatDaySummary,
@@ -92,7 +93,8 @@ function registerHandlers(bot: Bot) {
     try {
       await next();
     } catch (e) {
-      console.error("[bot] خطای هندلر:", e);
+      // خودِ شیء خطا چاپ نمی‌شود؛ خطاهای grammY توکن بات را همراه دارند
+      console.error("[bot] خطای هندلر:", describeError(e));
       try {
         await ctx.reply(MSG.error);
       } catch {
@@ -463,7 +465,7 @@ function registerHandlers(bot: Bot) {
         telegramFileId: file.file_id,
       });
     } catch (e) {
-      console.error("voice error:", e);
+      console.error("voice error:", describeError(e));
       await ctx.reply(MSG.error);
     }
   });
@@ -475,7 +477,7 @@ function registerHandlers(bot: Bot) {
         telegramMessageId: ctx.message.message_id,
       });
     } catch (e) {
-      console.error("text error:", e);
+      console.error("text error:", describeError(e));
       await ctx.reply(MSG.error);
     }
   });
