@@ -10,6 +10,23 @@ import { InlineKeyboard } from "grammy";
  * پس می‌دانیم دکمه را کدام عضو زده است.
  */
 
+/**
+ * فهرست دستورها برای منوی تلگرام.
+ *
+ * با `setMyCommands` ثبت می‌شود تا اعضا مجبور نباشند دستور را از حفظ تایپ
+ * کنند؛ با زدن «/» یا دکمه‌ی منو همین فهرست بالا می‌آید.
+ * ⚠️ هر دستوری که اینجا هست باید در `src/bot/index.ts` هندلر داشته باشد
+ * (تست `tests/commands.test.ts` همین را می‌سنجد).
+ */
+export const COMMANDS = [
+  { command: "report", description: "گزارش امروز من" },
+  { command: "close", description: "پایان روز من" },
+  { command: "month", description: "خروجی اکسل ماهانه" },
+  { command: "members", description: "اعضای ثبت‌شده" },
+  { command: "me", description: "نام و سمت من" },
+  { command: "start", description: "راهنما" },
+] as const;
+
 export const MSG = {
   welcome:
     "سلام 👋 من گزارشِ فعالیت روزانه‌ی اعضای هیئت‌مدیره را می‌نویسم.\n\n" +
