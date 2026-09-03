@@ -2,6 +2,7 @@ import { Bot, InputFile, type Context } from "grammy";
 import { config } from "@/lib/config";
 import { describeError } from "@/lib/log";
 import {
+  COMMANDS,
   MSG,
   nameKeyboard,
   reportKeyboard,
@@ -101,6 +102,14 @@ function registerHandlers(bot: Bot) {
   // ── دستورها ────────────────────────────────────────
   bot.command(["start", "help"], async (ctx) => {
     await ctx.reply(MSG.welcome);
+    // فهرست دستورها همین‌جا ثبت می‌شود تا در منوی تلگرام دیده شود و کسی
+    // مجبور نباشد دستور را از حفظ تایپ کند. عملیات idempotent است و
+    // شکستش نباید /start را خراب کند.
+    try {
+      await ctx.api.setMyCommands([...COMMANDS]);
+    } catch (e) {
+      console.error("[bot] ثبت فهرست دستورها ناموفق بود:", describeError(e));
+    }
   });
 
   bot.command("members", async (ctx) => {
