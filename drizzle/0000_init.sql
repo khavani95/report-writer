@@ -1,81 +1,61 @@
-CREATE TABLE "activities" (
+CREATE TABLE "activity_segments" (
 	"id" serial PRIMARY KEY NOT NULL,
-	"work_day_id" integer NOT NULL,
-	"work_front" text,
-	"activity_type" text,
-	"description" text NOT NULL,
-	"worker_names" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"member_day_id" integer NOT NULL,
+	"seq" integer DEFAULT 0 NOT NULL,
+	"place" text,
+	"description" text DEFAULT '' NOT NULL,
 	"start_time" text,
 	"end_time" text,
-	"is_full_day" boolean DEFAULT false NOT NULL,
-	"progress" text,
-	"created_at" timestamp DEFAULT now() NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE "activity_workers" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"activity_id" integer NOT NULL,
-	"worker_id" integer NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE "attendance" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"work_day_id" integer NOT NULL,
-	"worker_id" integer NOT NULL,
-	"entry_time" text,
-	"exit_time" text,
-	"break_minutes" integer DEFAULT 0 NOT NULL,
-	"worked_minutes" integer DEFAULT 0 NOT NULL,
-	"day_fraction" real DEFAULT 0 NOT NULL,
-	"overtime_minutes" integer DEFAULT 0 NOT NULL,
-	"work_front" text,
-	"note" text,
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "conversation_state" (
-	"chat_id" bigint PRIMARY KEY NOT NULL,
-	"active_project_id" integer,
-	"work_day_id" integer,
+	"chat_id" bigint NOT NULL,
+	"user_id" bigint NOT NULL,
 	"phase" text DEFAULT 'idle' NOT NULL,
-	"questions" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"answers" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"round" integer DEFAULT 0 NOT NULL,
+	"pending_text" text,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "extracted_events" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"work_day_id" integer NOT NULL,
-	"raw_message_id" integer,
-	"type" text NOT NULL,
-	"payload" jsonb NOT NULL,
-	"status" text DEFAULT 'pending' NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
+CREATE TABLE "holidays" (
+	"jalali_date" text PRIMARY KEY NOT NULL,
+	"is_holiday" boolean DEFAULT false NOT NULL,
+	"title" text,
+	"source" text DEFAULT 'legacy' NOT NULL,
+	"fetched_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "issues" (
+CREATE TABLE "member_days" (
 	"id" serial PRIMARY KEY NOT NULL,
-	"work_day_id" integer NOT NULL,
-	"type" text DEFAULT 'مشکل' NOT NULL,
-	"description" text NOT NULL,
-	"impact" text,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"member_id" integer NOT NULL,
+	"jalali_date" text NOT NULL,
+	"date_label" text NOT NULL,
+	"status" text DEFAULT 'open' NOT NULL,
+	"started_at" timestamp DEFAULT now() NOT NULL,
+	"closed_at" timestamp
 );
 --> statement-breakpoint
-CREATE TABLE "projects" (
+CREATE TABLE "members" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"chat_id" bigint NOT NULL,
-	"name" text DEFAULT 'کارگاه' NOT NULL,
-	"report_prefix" text DEFAULT 'RN' NOT NULL,
-	"is_archived" boolean DEFAULT false NOT NULL,
-	"settings" jsonb DEFAULT '{}'::jsonb,
+	"user_id" bigint,
+	"full_name" text NOT NULL,
+	"aliases" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"role" text,
+	"profile_status" text DEFAULT 'pending' NOT NULL,
+	"is_active" boolean DEFAULT true NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "processed_updates" (
+	"update_id" bigint PRIMARY KEY NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "raw_messages" (
 	"id" serial PRIMARY KEY NOT NULL,
-	"work_day_id" integer NOT NULL,
+	"member_day_id" integer NOT NULL,
+	"sender_user_id" bigint,
 	"telegram_message_id" bigint,
 	"kind" text NOT NULL,
 	"text" text,
@@ -84,62 +64,13 @@ CREATE TABLE "raw_messages" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "reworks" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"work_day_id" integer NOT NULL,
-	"work_front" text,
-	"amount" text,
-	"cause" text,
-	"description" text NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE "work_days" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"project_id" integer NOT NULL,
-	"jalali_date" text NOT NULL,
-	"date_label" text NOT NULL,
-	"report_no" text,
-	"revision" integer DEFAULT 0 NOT NULL,
-	"status" text DEFAULT 'open' NOT NULL,
-	"weather" text,
-	"started_at" timestamp DEFAULT now() NOT NULL,
-	"closed_at" timestamp
-);
---> statement-breakpoint
-CREATE TABLE "workers" (
-	"id" serial PRIMARY KEY NOT NULL,
-	"project_id" integer NOT NULL,
-	"full_name" text NOT NULL,
-	"aliases" jsonb DEFAULT '[]'::jsonb NOT NULL,
-	"trade" text,
-	"contractor" text,
-	"employment_type" text,
-	"profile_status" text DEFAULT 'pending' NOT NULL,
-	"is_active" boolean DEFAULT true NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
-);
---> statement-breakpoint
-ALTER TABLE "activities" ADD CONSTRAINT "activities_work_day_id_work_days_id_fk" FOREIGN KEY ("work_day_id") REFERENCES "public"."work_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "activity_workers" ADD CONSTRAINT "activity_workers_activity_id_activities_id_fk" FOREIGN KEY ("activity_id") REFERENCES "public"."activities"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "activity_workers" ADD CONSTRAINT "activity_workers_worker_id_workers_id_fk" FOREIGN KEY ("worker_id") REFERENCES "public"."workers"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "attendance" ADD CONSTRAINT "attendance_work_day_id_work_days_id_fk" FOREIGN KEY ("work_day_id") REFERENCES "public"."work_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "attendance" ADD CONSTRAINT "attendance_worker_id_workers_id_fk" FOREIGN KEY ("worker_id") REFERENCES "public"."workers"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "conversation_state" ADD CONSTRAINT "conversation_state_work_day_id_work_days_id_fk" FOREIGN KEY ("work_day_id") REFERENCES "public"."work_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "extracted_events" ADD CONSTRAINT "extracted_events_work_day_id_work_days_id_fk" FOREIGN KEY ("work_day_id") REFERENCES "public"."work_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "extracted_events" ADD CONSTRAINT "extracted_events_raw_message_id_raw_messages_id_fk" FOREIGN KEY ("raw_message_id") REFERENCES "public"."raw_messages"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "issues" ADD CONSTRAINT "issues_work_day_id_work_days_id_fk" FOREIGN KEY ("work_day_id") REFERENCES "public"."work_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "raw_messages" ADD CONSTRAINT "raw_messages_work_day_id_work_days_id_fk" FOREIGN KEY ("work_day_id") REFERENCES "public"."work_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "reworks" ADD CONSTRAINT "reworks_work_day_id_work_days_id_fk" FOREIGN KEY ("work_day_id") REFERENCES "public"."work_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "work_days" ADD CONSTRAINT "work_days_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "workers" ADD CONSTRAINT "workers_project_id_projects_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."projects"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "activities_day_idx" ON "activities" USING btree ("work_day_id");--> statement-breakpoint
-CREATE INDEX "activity_workers_idx" ON "activity_workers" USING btree ("activity_id");--> statement-breakpoint
-CREATE INDEX "attendance_day_idx" ON "attendance" USING btree ("work_day_id");--> statement-breakpoint
-CREATE INDEX "events_day_idx" ON "extracted_events" USING btree ("work_day_id","type");--> statement-breakpoint
-CREATE INDEX "issues_day_idx" ON "issues" USING btree ("work_day_id");--> statement-breakpoint
-CREATE INDEX "projects_chat_idx" ON "projects" USING btree ("chat_id");--> statement-breakpoint
-CREATE INDEX "raw_messages_day_idx" ON "raw_messages" USING btree ("work_day_id");--> statement-breakpoint
-CREATE INDEX "reworks_day_idx" ON "reworks" USING btree ("work_day_id");--> statement-breakpoint
-CREATE INDEX "work_days_project_idx" ON "work_days" USING btree ("project_id","status");--> statement-breakpoint
-CREATE INDEX "workers_project_idx" ON "workers" USING btree ("project_id");
+ALTER TABLE "activity_segments" ADD CONSTRAINT "activity_segments_member_day_id_member_days_id_fk" FOREIGN KEY ("member_day_id") REFERENCES "public"."member_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "member_days" ADD CONSTRAINT "member_days_member_id_members_id_fk" FOREIGN KEY ("member_id") REFERENCES "public"."members"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "raw_messages" ADD CONSTRAINT "raw_messages_member_day_id_member_days_id_fk" FOREIGN KEY ("member_day_id") REFERENCES "public"."member_days"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "segments_day_idx" ON "activity_segments" USING btree ("member_day_id","seq");--> statement-breakpoint
+CREATE UNIQUE INDEX "conversation_state_pk" ON "conversation_state" USING btree ("chat_id","user_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "member_days_member_date_idx" ON "member_days" USING btree ("member_id","jalali_date");--> statement-breakpoint
+CREATE INDEX "member_days_status_idx" ON "member_days" USING btree ("member_id","status");--> statement-breakpoint
+CREATE INDEX "members_chat_idx" ON "members" USING btree ("chat_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "members_chat_user_idx" ON "members" USING btree ("chat_id","user_id");--> statement-breakpoint
+CREATE INDEX "raw_messages_day_idx" ON "raw_messages" USING btree ("member_day_id");

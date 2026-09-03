@@ -1,629 +1,465 @@
-import { and, desc, eq, lt, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
 import { getDb } from "./index";
 import {
-  projects,
-  workers,
-  workDays,
+  members,
+  memberDays,
+  activitySegments,
   rawMessages,
-  extractedEvents,
-  activities,
-  activityWorkers,
-  attendance,
   conversationState,
   processedUpdates,
-  type Project,
-  type Worker,
-  type WorkDay,
+  type Member,
+  type MemberDay,
   type ConversationState,
-  type CardState,
 } from "./schema";
-import { toJalali, type JalaliInfo } from "@/lib/jalali";
-import { calcWork } from "@/services/attendance-calc";
+import type { JalaliInfo } from "@/lib/jalali";
 import { findWorkerMatch } from "@/lib/text-normalize";
+import type { Segment } from "@/ai/segments";
 
-/** ساخت پروژه‌ی جدید برای یک چت */
-export async function createProject(
+// ── اعضا ──────────────────────────────────────────────────
+
+/** عضو متناظر با یک کاربر تلگرام در این چت */
+export async function getMemberByUser(
   chatId: number,
-  name: string,
-): Promise<Project> {
-  const db = getDb();
-  const inserted = await db
-    .insert(projects)
-    .values({ chatId, name: name.trim() || "کارگاه" })
-    .returning();
-  return inserted[0];
-}
-
-/** فهرست پروژه‌های فعالِ یک چت */
-export async function listProjects(chatId: number): Promise<Project[]> {
-  const db = getDb();
-  return db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.chatId, chatId), eq(projects.isArchived, false)))
-    .orderBy(projects.createdAt);
-}
-
-export async function getProjectById(id: number): Promise<Project | null> {
+  userId: number,
+): Promise<Member | null> {
   const db = getDb();
   const rows = await db
     .select()
-    .from(projects)
-    .where(eq(projects.id, id))
+    .from(members)
+    .where(and(eq(members.chatId, chatId), eq(members.userId, userId)))
     .limit(1);
   return rows[0] ?? null;
 }
 
-/** پروژه‌ی فعالِ فعلیِ چت (اگر انتخاب شده باشد) */
-export async function getActiveProject(chatId: number): Promise<Project | null> {
-  const st = await getConversationState(chatId);
-  if (!st?.activeProjectId) return null;
-  return getProjectById(st.activeProjectId);
-}
-
-/** تعیین پروژه‌ی فعالِ چت */
-export async function setActiveProject(chatId: number, projectId: number) {
+export async function getMemberById(id: number): Promise<Member | null> {
   const db = getDb();
-  await db
-    .insert(conversationState)
-    .values({ chatId, activeProjectId: projectId, phase: "idle" })
-    .onConflictDoUpdate({
-      target: conversationState.chatId,
-      // با عوض‌کردن پروژه، هر جریانِ نیمه‌تمام (انتظار تاریخ، مرور کارتی) رها می‌شود
-      set: {
-        activeProjectId: projectId,
-        phase: "idle",
-        cardState: null,
-        updatedAt: new Date(),
-      },
-    });
-}
-
-/** پاک‌کردن پروژه‌ی فعال (بازگشت به منوی اصلی) */
-export async function clearActiveProject(chatId: number) {
-  const db = getDb();
-  await db
-    .update(conversationState)
-    .set({ activeProjectId: null, phase: "idle", updatedAt: new Date() })
-    .where(eq(conversationState.chatId, chatId));
-}
-
-/** همه‌ی روزهای بازِ چت (برای «پایان روز همه») */
-export async function listOpenDays(
-  chatId: number,
-): Promise<Array<{ day: WorkDay; project: Project }>> {
-  const db = getDb();
-  return db
-    .select({ day: workDays, project: projects })
-    .from(workDays)
-    .innerJoin(projects, eq(workDays.projectId, projects.id))
-    .where(and(eq(projects.chatId, chatId), eq(workDays.status, "open")))
-    .orderBy(projects.name);
-}
-
-/** گذاشتن فاز «منتظر نام پروژه» */
-export async function setAwaitProjectName(chatId: number) {
-  const db = getDb();
-  await db
-    .insert(conversationState)
-    .values({ chatId, phase: "await_project_name" })
-    .onConflictDoUpdate({
-      target: conversationState.chatId,
-      set: { phase: "await_project_name", updatedAt: new Date() },
-    });
-}
-
-/** روزکاریِ بازِ فعلی این پروژه (اگر باشد) */
-export async function getOpenWorkDay(
-  projectId: number,
-): Promise<WorkDay | null> {
-  const db = getDb();
-  const rows = await db
-    .select()
-    .from(workDays)
-    .where(and(eq(workDays.projectId, projectId), eq(workDays.status, "open")))
-    .orderBy(desc(workDays.startedAt))
-    .limit(1);
+  const rows = await db.select().from(members).where(eq(members.id, id)).limit(1);
   return rows[0] ?? null;
 }
 
-/** شروع یک روزکاری جدید برای تاریخ مشخص (پیش‌فرض امروز) */
-export async function startWorkDay(
-  project: Project,
-  j: JalaliInfo = toJalali(),
-): Promise<WorkDay> {
+/** همه‌ی اعضای فعالِ یک چت */
+export async function listMembers(chatId: number): Promise<Member[]> {
   const db = getDb();
-  // شماره‌ی گزارش تاریخ‌محور: مثل RN-14050430
-  const reportNo = `${project.reportPrefix}-${j.key.replace(/\//g, "")}`;
+  return db
+    .select()
+    .from(members)
+    .where(and(eq(members.chatId, chatId), eq(members.isActive, true)))
+    .orderBy(members.fullName);
+}
 
+/** ساخت عضو تازه */
+export async function createMember(data: {
+  chatId: number;
+  userId?: number | null;
+  fullName: string;
+  role?: string | null;
+  profileStatus?: string;
+}): Promise<Member> {
+  const db = getDb();
   const inserted = await db
-    .insert(workDays)
+    .insert(members)
     .values({
-      projectId: project.id,
-      jalaliDate: j.key,
-      dateLabel: j.label,
-      reportNo,
-      status: "open",
+      chatId: data.chatId,
+      userId: data.userId ?? null,
+      fullName: data.fullName.trim(),
+      role: data.role ?? null,
+      profileStatus: data.profileStatus ?? "pending",
     })
     .returning();
   return inserted[0];
 }
 
-/** روزکاری موجود برای یک تاریخ (اگر باشد) */
-export async function getWorkDayByDate(
-  projectId: number,
-  jalaliDate: string,
-): Promise<WorkDay | null> {
+/** به‌روزرسانی نام/سمت/آی‌دیِ یک عضو */
+export async function updateMember(
+  memberId: number,
+  patch: Partial<{
+    userId: number | null;
+    fullName: string;
+    role: string | null;
+    aliases: string[];
+    profileStatus: string;
+  }>,
+): Promise<void> {
+  const db = getDb();
+  await db.update(members).set(patch).where(eq(members.id, memberId));
+}
+
+/**
+ * عضوی که با این نام صدا زده شده را پیدا می‌کند.
+ * تطبیق همان مسیر روزنگار است: آیدین/ایدین/یدین یک نفرند.
+ */
+export function matchMemberByName(
+  roster: Member[],
+  name: string,
+): Member | null {
+  const idx = findWorkerMatch(
+    name,
+    roster.map((m) => [m.fullName, ...(m.aliases ?? [])]),
+  );
+  return idx >= 0 ? roster[idx] : null;
+}
+
+/**
+ * عضوی که فقط نامش را می‌دانیم (چون دیگری برایش گزارش داده).
+ * اگر نبود، با نام ساخته می‌شود و بعداً که خودش پیام داد به آی‌دی‌اش وصل می‌شود.
+ */
+export async function resolveMemberByName(
+  chatId: number,
+  name: string,
+  roster?: Member[],
+): Promise<Member> {
+  const list = roster ?? (await listMembers(chatId));
+  const found = matchMemberByName(list, name);
+  if (found) return found;
+  return createMember({ chatId, fullName: name });
+}
+
+/**
+ * عضوی «فقط نام» که با نامِ این کاربر می‌خواند و هنوز آی‌دی ندارد.
+ * وقتی کسی که قبلاً دیگران برایش گزارش داده‌اند خودش پیام می‌دهد، باید به
+ * همان ردیف وصل شود، نه اینکه ردیف دومی بسازیم.
+ */
+export async function findUnlinkedMemberByName(
+  chatId: number,
+  name: string,
+): Promise<Member | null> {
   const db = getDb();
   const rows = await db
     .select()
-    .from(workDays)
+    .from(members)
+    .where(and(eq(members.chatId, chatId), isNull(members.userId)));
+  return matchMemberByName(rows, name);
+}
+
+// ── روزهای هر عضو ─────────────────────────────────────────
+
+/** روزِ بازِ این عضو (اگر باشد) */
+export async function getOpenDay(memberId: number): Promise<MemberDay | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(memberDays)
+    .where(and(eq(memberDays.memberId, memberId), eq(memberDays.status, "open")))
+    .orderBy(asc(memberDays.jalaliDate))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function getDayById(id: number): Promise<MemberDay | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(memberDays)
+    .where(eq(memberDays.id, id))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * روزِ این عضو در این تاریخ را برمی‌گرداند و اگر نبود می‌سازد.
+ * درج با onConflictDoNothing است تا دو پیامِ همزمان دو روز نسازند.
+ */
+export async function openDay(
+  memberId: number,
+  j: JalaliInfo,
+): Promise<MemberDay> {
+  const db = getDb();
+  const inserted = await db
+    .insert(memberDays)
+    .values({
+      memberId,
+      jalaliDate: j.key,
+      dateLabel: j.label,
+      status: "open",
+    })
+    .onConflictDoNothing({
+      target: [memberDays.memberId, memberDays.jalaliDate],
+    })
+    .returning();
+  if (inserted[0]) return inserted[0];
+
+  const rows = await db
+    .select()
+    .from(memberDays)
+    .where(
+      and(eq(memberDays.memberId, memberId), eq(memberDays.jalaliDate, j.key)),
+    )
+    .limit(1);
+  if (!rows[0]) {
+    throw new Error(`روزِ ${j.key} برای عضو ${memberId} ساخته نشد.`);
+  }
+  return rows[0];
+}
+
+/** روزِ این عضو در یک تاریخ مشخص (بدون ساختن) */
+export async function getDayByDate(
+  memberId: number,
+  jalaliDate: string,
+): Promise<MemberDay | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(memberDays)
     .where(
       and(
-        eq(workDays.projectId, projectId),
-        eq(workDays.jalaliDate, jalaliDate),
+        eq(memberDays.memberId, memberId),
+        eq(memberDays.jalaliDate, jalaliDate),
       ),
     )
     .limit(1);
   return rows[0] ?? null;
 }
 
-/** روزکاری با شناسه */
-export async function getWorkDayById(id: number): Promise<WorkDay | null> {
+/** بستن روز */
+export async function closeDay(dayId: number): Promise<void> {
   const db = getDb();
-  const rows = await db
-    .select()
-    .from(workDays)
-    .where(eq(workDays.id, id))
-    .limit(1);
-  return rows[0] ?? null;
+  await db
+    .update(memberDays)
+    .set({ status: "closed", closedAt: new Date() })
+    .where(eq(memberDays.id, dayId));
+}
+
+/** بازکردن دوباره‌ی یک روزِ بسته (وقتی عضو گزارشِ تکمیلی می‌فرستد) */
+export async function reopenDay(dayId: number): Promise<void> {
+  const db = getDb();
+  await db
+    .update(memberDays)
+    .set({ status: "open", closedAt: null })
+    .where(eq(memberDays.id, dayId));
 }
 
 /**
- * روزهای کاری یک پروژه؛ در صورت دادن ماه («1405/04») فقط همان ماه.
- * برای خروجی زیپِ گزارش‌های روزانه استفاده می‌شود.
+ * روزهای بازِ این عضو که مربوط به امروز نیستند.
+ * اگر کسی «پایان روز» را فراموش کند، روزِ بعد این‌ها نهایی می‌شوند.
  */
-export async function listWorkDays(
-  projectId: number,
-  month?: string,
-): Promise<WorkDay[]> {
-  const db = getDb();
-  const rows = await db
-    .select()
-    .from(workDays)
-    .where(eq(workDays.projectId, projectId))
-    .orderBy(workDays.jalaliDate);
-  return month ? rows.filter((d) => d.jalaliDate.startsWith(month)) : rows;
-}
-
-/** تغییر وضعیت روز (open | review | closed) */
-export async function setDayStatus(
-  workDayId: number,
-  status: "open" | "review" | "closed",
-): Promise<void> {
-  const db = getDb();
-  await db
-    .update(workDays)
-    .set({
-      status,
-      ...(status === "closed" ? { closedAt: new Date() } : {}),
-    })
-    .where(eq(workDays.id, workDayId));
-}
-
-/** بستن روزکاری */
-export async function closeWorkDay(workDayId: number): Promise<void> {
-  await setDayStatus(workDayId, "closed");
-}
-
-/** افزایش شماره‌ی نسخه (rev) و برگرداندن مقدار جدید */
-export async function bumpRevision(workDayId: number): Promise<number> {
-  const db = getDb();
-  const rows = await db
-    .select({ r: workDays.revision })
-    .from(workDays)
-    .where(eq(workDays.id, workDayId))
-    .limit(1);
-  const next = (rows[0]?.r ?? 0) + 1;
-  await db
-    .update(workDays)
-    .set({ revision: next })
-    .where(eq(workDays.id, workDayId));
-  return next;
-}
-
-/** کل مکالمه‌ی روز به‌صورت متن (پیام‌های متنی + متن پیاده‌شده‌ی ویس‌ها) */
-export async function getDayConversation(workDayId: number): Promise<string> {
-  const db = getDb();
-  const rows = await db
-    .select()
-    .from(rawMessages)
-    .where(eq(rawMessages.workDayId, workDayId))
-    .orderBy(rawMessages.createdAt);
-  return rows
-    .map((m) => (m.text ?? m.transcript ?? "").trim())
-    .filter(Boolean)
-    .join("\n");
-}
-
-/** فهرست نیروهای فعال پروژه */
-export async function listWorkers(projectId: number): Promise<Worker[]> {
+export async function staleOpenDays(
+  memberId: number,
+  todayKey: string,
+): Promise<MemberDay[]> {
   const db = getDb();
   return db
     .select()
-    .from(workers)
-    .where(and(eq(workers.projectId, projectId), eq(workers.isActive, true)))
-    .orderBy(workers.fullName);
+    .from(memberDays)
+    .where(
+      and(
+        eq(memberDays.memberId, memberId),
+        eq(memberDays.status, "open"),
+        ne(memberDays.jalaliDate, todayKey),
+      ),
+    )
+    .orderBy(asc(memberDays.jalaliDate));
 }
 
-/**
- * تطبیق یا ساخت نیرو بر اساس نام گفته‌شده.
- * ابتدا با نام کامل یا نام‌های مستعار تطبیق می‌دهد، در غیر این صورت می‌سازد.
- */
-export async function resolveWorker(
-  projectId: number,
-  name: string,
-  trade?: string,
-): Promise<Worker> {
-  const db = getDb();
-  const clean = name.trim();
+// ── پیام‌های خام ──────────────────────────────────────────
 
-  // همه‌ی نیروهای پروژه را می‌گیریم و با نرمال‌سازی/شباهت تطبیق می‌دهیم
-  // (تا «آیدین/ایدین/یدین» یک نفر شناخته شوند).
-  const all = await db
-    .select()
-    .from(workers)
-    .where(eq(workers.projectId, projectId));
-
-  const idx = findWorkerMatch(
-    clean,
-    all.map((w) => [w.fullName, ...(w.aliases ?? [])]),
-  );
-  if (idx >= 0) return all[idx];
-
-  const inserted = await db
-    .insert(workers)
-    .values({
-      projectId,
-      fullName: clean,
-      aliases: [],
-      trade: trade ?? null,
-    })
-    .returning();
-  return inserted[0];
-}
-
-/** ذخیره‌ی پیام خام */
 export async function saveRawMessage(data: {
-  workDayId: number;
+  memberDayId: number;
+  senderUserId?: number;
   telegramMessageId?: number;
   kind: "text" | "voice";
   text?: string;
   transcript?: string;
   telegramFileId?: string;
-}) {
+}): Promise<void> {
   const db = getDb();
-  // تلگرام در صورت کندیِ پاسخ همان آپدیت را دوباره می‌فرستد؛ بدون این بررسی
-  // یک پیام دوبار ذخیره می‌شود و در تحلیلِ روز دوبار به حساب می‌آید.
-  if (data.telegramMessageId) {
-    const dup = await db
-      .select({ id: rawMessages.id })
-      .from(rawMessages)
-      .where(
-        and(
-          eq(rawMessages.workDayId, data.workDayId),
-          eq(rawMessages.telegramMessageId, data.telegramMessageId),
-        ),
-      )
-      .limit(1);
-    if (dup.length) return null;
-  }
-  const inserted = await db.insert(rawMessages).values(data).returning();
-  return inserted[0];
+  await db.insert(rawMessages).values({
+    memberDayId: data.memberDayId,
+    senderUserId: data.senderUserId ?? null,
+    telegramMessageId: data.telegramMessageId ?? null,
+    kind: data.kind,
+    text: data.text ?? null,
+    transcript: data.transcript ?? null,
+    telegramFileId: data.telegramFileId ?? null,
+  });
 }
 
-/** ذخیره‌ی رویدادهای استخراج‌شده */
-export async function saveEvents(
-  workDayId: number,
-  rawMessageId: number,
-  events: Array<{ type: string; payload: Record<string, unknown> }>,
-) {
-  if (!events.length) return;
+/** همه‌ی پیام‌های یک روز، به ترتیب */
+export async function getDayMessages(dayId: number): Promise<string[]> {
   const db = getDb();
-  await db.insert(extractedEvents).values(
-    events.map((e) => ({
-      workDayId,
-      rawMessageId,
-      type: e.type,
-      payload: e.payload,
+  const rows = await db
+    .select({ text: rawMessages.text, transcript: rawMessages.transcript })
+    .from(rawMessages)
+    .where(eq(rawMessages.memberDayId, dayId))
+    .orderBy(asc(rawMessages.id));
+  return rows
+    .map((r) => (r.text ?? r.transcript ?? "").trim())
+    .filter(Boolean);
+}
+
+// ── قطعه‌های فعالیت ───────────────────────────────────────
+
+/** قطعه‌های یک روز، به ترتیب */
+export async function getSegments(dayId: number): Promise<Segment[]> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(activitySegments)
+    .where(eq(activitySegments.memberDayId, dayId))
+    .orderBy(asc(activitySegments.seq), asc(activitySegments.id));
+  return rows.map((r) => ({
+    place: r.place,
+    description: r.description,
+    startTime: r.startTime,
+    endTime: r.endTime,
+  }));
+}
+
+/**
+ * زنجیره‌ی روز را از نو می‌نویسد.
+ * ⚠️ همیشه یک حذف و یک درجِ دسته‌ای — نه یک درج به‌ازای هر قطعه. درایور HTTP
+ * نئون هر دستور را یک درخواست جداگانه می‌فرستد و تعداد رفت‌وبرگشت مستقیماً
+ * زمان پاسخ بات است.
+ */
+export async function replaceSegments(
+  dayId: number,
+  segments: Segment[],
+): Promise<void> {
+  const db = getDb();
+  await db
+    .delete(activitySegments)
+    .where(eq(activitySegments.memberDayId, dayId));
+  if (!segments.length) return;
+  await db.insert(activitySegments).values(
+    segments.map((s, i) => ({
+      memberDayId: dayId,
+      seq: i,
+      place: s.place,
+      description: s.description,
+      startTime: s.startTime,
+      endTime: s.endTime,
     })),
   );
 }
 
-// ── تکمیل پروفایل و فعالیت (ویزارد پایان روز) ────────────
+// ── داده‌ی ماهانه (برای اکسل) ─────────────────────────────
 
-/** تکمیل پروفایل یک نیرو و علامت‌گذاری به‌عنوان کامل */
-export async function updateWorkerProfile(
-  workerId: number,
-  data: { fullName?: string; trade?: string; employmentType?: string },
-) {
-  const db = getDb();
-  const patch: Record<string, unknown> = { profileStatus: "complete" };
-  if (data.fullName) patch.fullName = data.fullName;
-  if (data.trade) patch.trade = data.trade;
-  if (data.employmentType) patch.employmentType = data.employmentType;
-  await db.update(workers).set(patch).where(eq(workers.id, workerId));
+export interface MonthDayRow {
+  memberId: number;
+  jalaliDate: string;
+  segments: Segment[];
 }
 
-/** ثبت ساعت ورود/خروج یک نیرو و بازمحاسبه‌ی کارکرد */
-export async function updateAttendanceTime(
-  workDayId: number,
-  workerId: number,
-  entry: string | null,
-  exit: string | null,
-) {
+/**
+ * همه‌ی روزهای یک ماه برای همه‌ی اعضای این چت، با قطعه‌هایشان.
+ * عمداً سه پرس‌وجوی ثابت است، نه یکی به‌ازای هر عضو یا هر روز.
+ */
+export async function loadMonth(
+  chatId: number,
+  month: string,
+): Promise<{ members: Member[]; days: MonthDayRow[] }> {
   const db = getDb();
-  const patch: Record<string, unknown> = {
-    entryTime: entry,
-    exitTime: exit,
-  };
-  if (entry && exit) {
-    const calc = calcWork(entry, exit);
-    if (calc) {
-      patch.breakMinutes = calc.breakMinutes;
-      patch.workedMinutes = calc.workedMinutes;
-      patch.dayFraction = calc.dayFraction;
-      patch.overtimeMinutes = calc.overtimeMinutes;
-    }
-  }
-  await db
-    .update(attendance)
-    .set(patch)
+  const roster = await listMembers(chatId);
+  if (!roster.length) return { members: [], days: [] };
+
+  const dayRows = await db
+    .select({
+      id: memberDays.id,
+      memberId: memberDays.memberId,
+      jalaliDate: memberDays.jalaliDate,
+    })
+    .from(memberDays)
     .where(
-      and(
-        eq(attendance.workDayId, workDayId),
-        eq(attendance.workerId, workerId),
+      inArray(
+        memberDays.memberId,
+        roster.map((m) => m.id),
       ),
     );
-}
+  const inMonth = dayRows.filter((d) => d.jalaliDate.startsWith(month));
+  if (!inMonth.length) return { members: roster, days: [] };
 
-/** فهرست فعالیت‌های یک روز (برای دکمه‌های انتخاب در ویزارد) */
-export async function listDayActivities(workDayId: number) {
-  const db = getDb();
-  return db
-    .select({
-      id: activities.id,
-      description: activities.description,
-      workFront: activities.workFront,
-    })
-    .from(activities)
-    .where(eq(activities.workDayId, workDayId));
-}
-
-/** اتصال یک نیرو به یک فعالیت موجود (بدون ساخت فعالیت جدید) */
-export async function linkWorkerToActivity(
-  activityId: number,
-  workerId: number,
-) {
-  const db = getDb();
-  const existing = await db
-    .select({ id: activityWorkers.id })
-    .from(activityWorkers)
+  const segRows = await db
+    .select()
+    .from(activitySegments)
     .where(
-      and(
-        eq(activityWorkers.activityId, activityId),
-        eq(activityWorkers.workerId, workerId),
+      inArray(
+        activitySegments.memberDayId,
+        inMonth.map((d) => d.id),
       ),
     )
-    .limit(1);
-  if (existing[0]) return;
-  await db.insert(activityWorkers).values({ activityId, workerId });
+    .orderBy(asc(activitySegments.seq), asc(activitySegments.id));
+
+  const byDay = new Map<number, Segment[]>();
+  for (const s of segRows) {
+    const list = byDay.get(s.memberDayId) ?? [];
+    list.push({
+      place: s.place,
+      description: s.description,
+      startTime: s.startTime,
+      endTime: s.endTime,
+    });
+    byDay.set(s.memberDayId, list);
+  }
+
+  return {
+    members: roster,
+    days: inMonth.map((d) => ({
+      memberId: d.memberId,
+      jalaliDate: d.jalaliDate,
+      segments: byDay.get(d.id) ?? [],
+    })),
+  };
 }
 
-/** ثبت بازه‌ی زمانی یک فعالیت */
-export async function updateActivityTime(
-  activityId: number,
-  data: { startTime?: string; endTime?: string; isFullDay?: boolean },
-) {
+/** ماه‌هایی که برای این چت داده دارند (تازه‌ترین اول) */
+export async function availableMonths(chatId: number): Promise<string[]> {
   const db = getDb();
-  await db
-    .update(activities)
-    .set({
-      startTime: data.startTime ?? null,
-      endTime: data.endTime ?? null,
-      isFullDay: data.isFullDay ?? false,
-    })
-    .where(eq(activities.id, activityId));
+  const roster = await listMembers(chatId);
+  if (!roster.length) return [];
+  const rows = await db
+    .select({ date: memberDays.jalaliDate })
+    .from(memberDays)
+    .where(
+      inArray(
+        memberDays.memberId,
+        roster.map((m) => m.id),
+      ),
+    );
+  const months = new Set(rows.map((r) => r.date.slice(0, 7)));
+  return [...months].sort().reverse();
 }
 
-/** افزودن یک فعالیت جدید برای نیروی بدون فعالیت + اتصال او */
-export async function addCoverageActivity(
-  workDayId: number,
-  workerId: number,
-  data: {
-    description: string;
-    workFront?: string;
-    activityType?: string;
-    startTime?: string;
-    endTime?: string;
-    isFullDay?: boolean;
-  },
-) {
-  const db = getDb();
-  const [act] = await db
-    .insert(activities)
-    .values({
-      workDayId,
-      workFront: data.workFront ?? null,
-      activityType: data.activityType ?? null,
-      description: data.description,
-      startTime: data.startTime ?? null,
-      endTime: data.endTime ?? null,
-      isFullDay: data.isFullDay ?? false,
-    })
-    .returning({ id: activities.id });
-  await db
-    .insert(activityWorkers)
-    .values({ activityId: act.id, workerId });
-}
+// ── وضعیت گفتگو (به‌ازای هر کاربر) ────────────────────────
 
-// ── وضعیت گفتگو (ویزارد) ─────────────────────────────────
-
-export async function getConversationState(
+export async function getState(
   chatId: number,
+  userId: number,
 ): Promise<ConversationState | null> {
   const db = getDb();
   const rows = await db
     .select()
     .from(conversationState)
-    .where(eq(conversationState.chatId, chatId))
+    .where(
+      and(
+        eq(conversationState.chatId, chatId),
+        eq(conversationState.userId, userId),
+      ),
+    )
     .limit(1);
   return rows[0] ?? null;
 }
 
-/** شروع/به‌روزرسانی دورِ بازبینی با فهرست سؤال‌های تازه */
-export async function setReview(
+/** گذاشتن فاز برای یک کاربرِ مشخص در یک چت */
+export async function setPhase(
   chatId: number,
-  workDayId: number,
-  questions: string[],
-  round: number,
-) {
+  userId: number,
+  phase: string,
+  pendingText?: string | null,
+): Promise<void> {
   const db = getDb();
   await db
     .insert(conversationState)
-    .values({
-      chatId,
-      workDayId,
-      phase: "review",
-      questions,
-      answers: [],
-      round,
-      updatedAt: new Date(),
-    })
+    .values({ chatId, userId, phase, pendingText: pendingText ?? null })
     .onConflictDoUpdate({
-      target: conversationState.chatId,
-      set: {
-        workDayId,
-        phase: "review",
-        questions,
-        answers: [],
-        round,
-        updatedAt: new Date(),
-      },
+      target: [conversationState.chatId, conversationState.userId],
+      set: { phase, pendingText: pendingText ?? null, updatedAt: new Date() },
     });
 }
 
-/** شروع مرور کارتیِ پایان روز */
-export async function setCards(chatId: number, workDayId: number) {
-  const db = getDb();
-  const cardState: CardState = {
-    index: 0,
-    deletions: [],
-    changes: [],
-    editTarget: null,
-  };
-  await db
-    .update(conversationState)
-    .set({ phase: "cards", workDayId, cardState, updatedAt: new Date() })
-    .where(eq(conversationState.chatId, chatId));
+export async function clearState(chatId: number, userId: number): Promise<void> {
+  await setPhase(chatId, userId, "idle", null);
 }
 
-/** به‌روزرسانی وضعیت کارت‌ها (و اختیاری فاز) */
-export async function updateCardState(
-  chatId: number,
-  patch: Partial<CardState>,
-  phase?: string,
-) {
-  const db = getDb();
-  const cur = await getConversationState(chatId);
-  const base: CardState = cur?.cardState ?? {
-    index: 0,
-    deletions: [],
-    changes: [],
-    editTarget: null,
-  };
-  const cardState: CardState = { ...base, ...patch };
-  const set: Record<string, unknown> = { cardState, updatedAt: new Date() };
-  if (phase) set.phase = phase;
-  await db
-    .update(conversationState)
-    .set(set)
-    .where(eq(conversationState.chatId, chatId));
-}
-
-/** گذاشتن فاز «تأیید نهایی» */
-export async function setConfirm(chatId: number, workDayId: number) {
-  const db = getDb();
-  await db
-    .insert(conversationState)
-    .values({ chatId, workDayId, phase: "confirm" })
-    .onConflictDoUpdate({
-      target: conversationState.chatId,
-      set: { workDayId, phase: "confirm", updatedAt: new Date() },
-    });
-}
-
-/** به‌روزرسانی فقط سؤال‌ها و شماره‌ی دور (پاسخ‌های قبلی حفظ می‌شوند) */
-export async function setReviewQuestions(
-  chatId: number,
-  questions: string[],
-  round: number,
-) {
-  const db = getDb();
-  await db
-    .update(conversationState)
-    .set({ phase: "review", questions, round, updatedAt: new Date() })
-    .where(eq(conversationState.chatId, chatId));
-}
-
-/** افزودن یک پاسخ به پاسخ‌های جمع‌شده‌ی این بازبینی */
-export async function addAnswer(chatId: number, answer: string) {
-  const db = getDb();
-  const cur = await getConversationState(chatId);
-  const answers = [...(cur?.answers ?? []), answer];
-  await db
-    .update(conversationState)
-    .set({ answers, updatedAt: new Date() })
-    .where(eq(conversationState.chatId, chatId));
-}
-
-/** گذاشتن فاز «منتظر ورودی تاریخ» */
-export async function setAwaitDate(chatId: number) {
-  const db = getDb();
-  await db
-    .insert(conversationState)
-    .values({ chatId, phase: "await_date", questions: [], answers: [], round: 0 })
-    .onConflictDoUpdate({
-      target: conversationState.chatId,
-      set: {
-        phase: "await_date",
-        questions: [],
-        answers: [],
-        round: 0,
-        workDayId: null,
-        updatedAt: new Date(),
-      },
-    });
-}
-
-export async function clearConversationState(chatId: number) {
-  const db = getDb();
-  await db
-    .insert(conversationState)
-    .values({ chatId, phase: "idle", questions: [], answers: [], round: 0 })
-    .onConflictDoUpdate({
-      target: conversationState.chatId,
-      set: {
-        phase: "idle",
-        questions: [],
-        answers: [],
-        cardState: null,
-        round: 0,
-        workDayId: null,
-        updatedAt: new Date(),
-      },
-    });
-}
+// ── حذف آپدیت تکراری ──────────────────────────────────────
 
 /**
  * «تصاحبِ» یک آپدیت تلگرام: اگر تازه باشد true، اگر قبلاً پردازش شده false.
@@ -659,17 +495,4 @@ export async function pruneProcessedUpdates(): Promise<void> {
   } catch (e) {
     console.error("[pruneProcessedUpdates] failed:", e);
   }
-}
-
-/**
- * نشانه‌گذاری «در حال پردازش» پیش از کار سنگینِ پایان روز.
- * تا وقتی این فاز برقرار است، فشردن دوباره‌ی «پایان روز» کارِ موازی
- * راه نمی‌اندازد. با `setCards` یا هر فاز بعدی خودبه‌خود برداشته می‌شود.
- */
-export async function setBusy(chatId: number, workDayId: number) {
-  const db = getDb();
-  await db
-    .update(conversationState)
-    .set({ phase: "busy", workDayId, updatedAt: new Date() })
-    .where(eq(conversationState.chatId, chatId));
 }

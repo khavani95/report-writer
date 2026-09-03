@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
-  title: "روزنگار — گزارش روزانه‌ی کارگاه",
-  description: "چت‌بات هوشمند تلگرام برای گزارش روزانه‌ی کارگاه",
+  title: "گزارش فعالیت هیئت‌مدیره",
+  description: "بات تلگرام گزارش روزانه و ماهانه‌ی فعالیت اعضای هیئت‌مدیره",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

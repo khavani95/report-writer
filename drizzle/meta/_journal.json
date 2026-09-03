@@ -5,36 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1784831675713,
+      "when": 1788396564947,
       "tag": "0000_init",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1784900202141,
-      "tag": "0001_card_state",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1787325719143,
-      "tag": "0002_holidays_cache",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1787327830424,
-      "tag": "0003_holiday_source",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1787752346516,
-      "tag": "0004_processed_updates",
       "breakpoints": true
     }
   ]
