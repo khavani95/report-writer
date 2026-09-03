@@ -1,11 +1,11 @@
 {
-  "id": "892212b1-b8e2-41ad-89fe-33669439ce04",
+  "id": "dfd88ec9-e9be-4eb8-90a5-26cde26a59e3",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.activities": {
-      "name": "activities",
+    "public.activity_segments": {
+      "name": "activity_segments",
       "schema": "",
       "columns": {
         "id": {
@@ -14,20 +14,21 @@
           "primaryKey": true,
           "notNull": true
         },
-        "work_day_id": {
-          "name": "work_day_id",
+        "member_day_id": {
+          "name": "member_day_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "work_front": {
-          "name": "work_front",
-          "type": "text",
+        "seq": {
+          "name": "seq",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true,
+          "default": 0
         },
-        "activity_type": {
-          "name": "activity_type",
+        "place": {
+          "name": "place",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -36,14 +37,8 @@
           "name": "description",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
-        },
-        "worker_names": {
-          "name": "worker_names",
-          "type": "jsonb",
-          "primaryKey": false,
           "notNull": true,
-          "default": "'[]'::jsonb"
+          "default": "''"
         },
         "start_time": {
           "name": "start_time",
@@ -57,19 +52,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "is_full_day": {
-          "name": "is_full_day",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "progress": {
-          "name": "progress",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -79,11 +61,17 @@
         }
       },
       "indexes": {
-        "activities_day_idx": {
-          "name": "activities_day_idx",
+        "segments_day_idx": {
+          "name": "segments_day_idx",
           "columns": [
             {
-              "expression": "work_day_id",
+              "expression": "member_day_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "seq",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -96,219 +84,12 @@
         }
       },
       "foreignKeys": {
-        "activities_work_day_id_work_days_id_fk": {
-          "name": "activities_work_day_id_work_days_id_fk",
-          "tableFrom": "activities",
-          "tableTo": "work_days",
+        "activity_segments_member_day_id_member_days_id_fk": {
+          "name": "activity_segments_member_day_id_member_days_id_fk",
+          "tableFrom": "activity_segments",
+          "tableTo": "member_days",
           "columnsFrom": [
-            "work_day_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.activity_workers": {
-      "name": "activity_workers",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "activity_id": {
-          "name": "activity_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "worker_id": {
-          "name": "worker_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "activity_workers_idx": {
-          "name": "activity_workers_idx",
-          "columns": [
-            {
-              "expression": "activity_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "activity_workers_activity_id_activities_id_fk": {
-          "name": "activity_workers_activity_id_activities_id_fk",
-          "tableFrom": "activity_workers",
-          "tableTo": "activities",
-          "columnsFrom": [
-            "activity_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "activity_workers_worker_id_workers_id_fk": {
-          "name": "activity_workers_worker_id_workers_id_fk",
-          "tableFrom": "activity_workers",
-          "tableTo": "workers",
-          "columnsFrom": [
-            "worker_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.attendance": {
-      "name": "attendance",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "work_day_id": {
-          "name": "work_day_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "worker_id": {
-          "name": "worker_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "entry_time": {
-          "name": "entry_time",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "exit_time": {
-          "name": "exit_time",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "break_minutes": {
-          "name": "break_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "worked_minutes": {
-          "name": "worked_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "day_fraction": {
-          "name": "day_fraction",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "overtime_minutes": {
-          "name": "overtime_minutes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "work_front": {
-          "name": "work_front",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "attendance_day_idx": {
-          "name": "attendance_day_idx",
-          "columns": [
-            {
-              "expression": "work_day_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "attendance_work_day_id_work_days_id_fk": {
-          "name": "attendance_work_day_id_work_days_id_fk",
-          "tableFrom": "attendance",
-          "tableTo": "work_days",
-          "columnsFrom": [
-            "work_day_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "attendance_worker_id_workers_id_fk": {
-          "name": "attendance_worker_id_workers_id_fk",
-          "tableFrom": "attendance",
-          "tableTo": "workers",
-          "columnsFrom": [
-            "worker_id"
+            "member_day_id"
           ],
           "columnsTo": [
             "id"
@@ -330,20 +111,14 @@
         "chat_id": {
           "name": "chat_id",
           "type": "bigint",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true
         },
-        "active_project_id": {
-          "name": "active_project_id",
-          "type": "integer",
+        "user_id": {
+          "name": "user_id",
+          "type": "bigint",
           "primaryKey": false,
-          "notNull": false
-        },
-        "work_day_id": {
-          "name": "work_day_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "phase": {
           "name": "phase",
@@ -352,26 +127,11 @@
           "notNull": true,
           "default": "'idle'"
         },
-        "questions": {
-          "name": "questions",
-          "type": "jsonb",
+        "pending_text": {
+          "name": "pending_text",
+          "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "answers": {
-          "name": "answers",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "round": {
-          "name": "round",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
+          "notNull": false
         },
         "updated_at": {
           "name": "updated_at",
@@ -381,30 +141,84 @@
           "default": "now()"
         }
       },
-      "indexes": {},
-      "foreignKeys": {
-        "conversation_state_work_day_id_work_days_id_fk": {
-          "name": "conversation_state_work_day_id_work_days_id_fk",
-          "tableFrom": "conversation_state",
-          "tableTo": "work_days",
-          "columnsFrom": [
-            "work_day_id"
+      "indexes": {
+        "conversation_state_pk": {
+          "name": "conversation_state_pk",
+          "columns": [
+            {
+              "expression": "chat_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
           ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.extracted_events": {
-      "name": "extracted_events",
+    "public.holidays": {
+      "name": "holidays",
+      "schema": "",
+      "columns": {
+        "jalali_date": {
+          "name": "jalali_date",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "is_holiday": {
+          "name": "is_holiday",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'legacy'"
+        },
+        "fetched_at": {
+          "name": "fetched_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.member_days": {
+      "name": "member_days",
       "schema": "",
       "columns": {
         "id": {
@@ -413,27 +227,21 @@
           "primaryKey": true,
           "notNull": true
         },
-        "work_day_id": {
-          "name": "work_day_id",
+        "member_id": {
+          "name": "member_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "raw_message_id": {
-          "name": "raw_message_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "type": {
-          "name": "type",
+        "jalali_date": {
+          "name": "jalali_date",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "payload": {
-          "name": "payload",
-          "type": "jsonb",
+        "date_label": {
+          "name": "date_label",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -442,122 +250,55 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'open'"
         },
-        "created_at": {
-          "name": "created_at",
+        "started_at": {
+          "name": "started_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
-        "events_day_idx": {
-          "name": "events_day_idx",
+        "member_days_member_date_idx": {
+          "name": "member_days_member_date_idx",
           "columns": [
             {
-              "expression": "work_day_id",
+              "expression": "member_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             },
             {
-              "expression": "type",
+              "expression": "jalali_date",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
             }
           ],
-          "isUnique": false,
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}
-        }
-      },
-      "foreignKeys": {
-        "extracted_events_work_day_id_work_days_id_fk": {
-          "name": "extracted_events_work_day_id_work_days_id_fk",
-          "tableFrom": "extracted_events",
-          "tableTo": "work_days",
-          "columnsFrom": [
-            "work_day_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
         },
-        "extracted_events_raw_message_id_raw_messages_id_fk": {
-          "name": "extracted_events_raw_message_id_raw_messages_id_fk",
-          "tableFrom": "extracted_events",
-          "tableTo": "raw_messages",
-          "columnsFrom": [
-            "raw_message_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.issues": {
-      "name": "issues",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "work_day_id": {
-          "name": "work_day_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'مشکل'"
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "impact": {
-          "name": "impact",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "issues_day_idx": {
-          "name": "issues_day_idx",
+        "member_days_status_idx": {
+          "name": "member_days_status_idx",
           "columns": [
             {
-              "expression": "work_day_id",
+              "expression": "member_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -570,12 +311,12 @@
         }
       },
       "foreignKeys": {
-        "issues_work_day_id_work_days_id_fk": {
-          "name": "issues_work_day_id_work_days_id_fk",
-          "tableFrom": "issues",
-          "tableTo": "work_days",
+        "member_days_member_id_members_id_fk": {
+          "name": "member_days_member_id_members_id_fk",
+          "tableFrom": "member_days",
+          "tableTo": "members",
           "columnsFrom": [
-            "work_day_id"
+            "member_id"
           ],
           "columnsTo": [
             "id"
@@ -590,8 +331,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.projects": {
-      "name": "projects",
+    "public.members": {
+      "name": "members",
       "schema": "",
       "columns": {
         "id": {
@@ -606,33 +347,44 @@
           "primaryKey": false,
           "notNull": true
         },
-        "name": {
-          "name": "name",
+        "user_id": {
+          "name": "user_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "full_name": {
+          "name": "full_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "aliases": {
+          "name": "aliases",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "profile_status": {
+          "name": "profile_status",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'کارگاه'"
+          "default": "'pending'"
         },
-        "report_prefix": {
-          "name": "report_prefix",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'RN'"
-        },
-        "is_archived": {
-          "name": "is_archived",
+        "is_active": {
+          "name": "is_active",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": false
-        },
-        "settings": {
-          "name": "settings",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'{}'::jsonb"
+          "default": true
         },
         "created_at": {
           "name": "created_at",
@@ -643,8 +395,8 @@
         }
       },
       "indexes": {
-        "projects_chat_idx": {
-          "name": "projects_chat_idx",
+        "members_chat_idx": {
+          "name": "members_chat_idx",
           "columns": [
             {
               "expression": "chat_id",
@@ -657,8 +409,55 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "members_chat_user_idx": {
+          "name": "members_chat_user_idx",
+          "columns": [
+            {
+              "expression": "chat_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.processed_updates": {
+      "name": "processed_updates",
+      "schema": "",
+      "columns": {
+        "update_id": {
+          "name": "update_id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
@@ -676,11 +475,17 @@
           "primaryKey": true,
           "notNull": true
         },
-        "work_day_id": {
-          "name": "work_day_id",
+        "member_day_id": {
+          "name": "member_day_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
+        },
+        "sender_user_id": {
+          "name": "sender_user_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         },
         "telegram_message_id": {
           "name": "telegram_message_id",
@@ -725,7 +530,7 @@
           "name": "raw_messages_day_idx",
           "columns": [
             {
-              "expression": "work_day_id",
+              "expression": "member_day_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -738,317 +543,12 @@
         }
       },
       "foreignKeys": {
-        "raw_messages_work_day_id_work_days_id_fk": {
-          "name": "raw_messages_work_day_id_work_days_id_fk",
+        "raw_messages_member_day_id_member_days_id_fk": {
+          "name": "raw_messages_member_day_id_member_days_id_fk",
           "tableFrom": "raw_messages",
-          "tableTo": "work_days",
+          "tableTo": "member_days",
           "columnsFrom": [
-            "work_day_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.reworks": {
-      "name": "reworks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "work_day_id": {
-          "name": "work_day_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "work_front": {
-          "name": "work_front",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "amount": {
-          "name": "amount",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "cause": {
-          "name": "cause",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "reworks_day_idx": {
-          "name": "reworks_day_idx",
-          "columns": [
-            {
-              "expression": "work_day_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "reworks_work_day_id_work_days_id_fk": {
-          "name": "reworks_work_day_id_work_days_id_fk",
-          "tableFrom": "reworks",
-          "tableTo": "work_days",
-          "columnsFrom": [
-            "work_day_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.work_days": {
-      "name": "work_days",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "jalali_date": {
-          "name": "jalali_date",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "date_label": {
-          "name": "date_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "report_no": {
-          "name": "report_no",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revision": {
-          "name": "revision",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'open'"
-        },
-        "weather": {
-          "name": "weather",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "started_at": {
-          "name": "started_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "closed_at": {
-          "name": "closed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        }
-      },
-      "indexes": {
-        "work_days_project_idx": {
-          "name": "work_days_project_idx",
-          "columns": [
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "work_days_project_id_projects_id_fk": {
-          "name": "work_days_project_id_projects_id_fk",
-          "tableFrom": "work_days",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.workers": {
-      "name": "workers",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "full_name": {
-          "name": "full_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "aliases": {
-          "name": "aliases",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
-        },
-        "trade": {
-          "name": "trade",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "contractor": {
-          "name": "contractor",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "employment_type": {
-          "name": "employment_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "profile_status": {
-          "name": "profile_status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "is_active": {
-          "name": "is_active",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "workers_project_idx": {
-          "name": "workers_project_idx",
-          "columns": [
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "workers_project_id_projects_id_fk": {
-          "name": "workers_project_id_projects_id_fk",
-          "tableFrom": "workers",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
+            "member_day_id"
           ],
           "columnsTo": [
             "id"

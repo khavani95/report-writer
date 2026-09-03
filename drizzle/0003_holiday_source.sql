@@ -1,1 +1,0 @@
-ALTER TABLE "holidays" ADD COLUMN "source" text DEFAULT 'legacy' NOT NULL;

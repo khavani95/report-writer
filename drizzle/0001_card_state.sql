@@ -1,1 +1,0 @@
-ALTER TABLE "conversation_state" ADD COLUMN "card_state" jsonb;

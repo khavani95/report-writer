@@ -1,14 +1,15 @@
 {
-  "name": "roznegar",
+  "name": "board-activity-report",
   "version": "0.1.0",
   "private": true,
-  "description": "چت‌بات هوشمند تلگرام برای گزارش روزانه کارگاه",
+  "description": "بات تلگرام گزارش فعالیت روزانه و ماهانه‌ی اعضای هیئت‌مدیره",
   "scripts": {
     "dev": "next dev",
     "build": "tsx scripts/migrate.ts && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:push": "drizzle-kit push",

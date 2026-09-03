@@ -36,7 +36,7 @@ export async function POST(req: Request): Promise<Response> {
 
 // برای بررسی سلامت از مرورگر
 export async function GET(): Promise<Response> {
-  return new Response("روزنگار فعال است ✅", {
+  return new Response("بات گزارش فعالیت هیئت‌مدیره فعال است ✅", {
     headers: { "content-type": "text/plain; charset=utf-8" },
   });
 }
