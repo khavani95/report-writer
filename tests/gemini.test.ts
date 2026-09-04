@@ -18,7 +18,7 @@ test("هر فراخوانی Gemini با AbortSignal مهلت‌دار فرستا
   client.models.generateContent = (async (req: Record<string, unknown>) => {
     seen.push(req);
     throw new Error('{"error":{"code":400,"message":"bad request"}}');
-  }) as typeof client.models.generateContent;
+  }) as unknown as typeof client.models.generateContent;
 
   try {
     await assert.rejects(

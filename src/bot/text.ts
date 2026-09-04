@@ -22,6 +22,7 @@ export const COMMANDS = [
   { command: "report", description: "گزارش امروز من" },
   { command: "close", description: "پایان روز من" },
   { command: "month", description: "خروجی اکسل ماهانه" },
+  { command: "undo", description: "برگرداندن آخرین ثبت من" },
   { command: "members", description: "اعضای ثبت‌شده" },
   { command: "me", description: "نام و سمت من" },
   { command: "start", description: "راهنما" },
@@ -38,6 +39,7 @@ export const MSG = {
     "می‌توانید به‌جای دیگری هم گزارش بدهید: «ایدین امروز ساعت ۷ رفت باغ موزه».\n\n" +
     "دستورها:\n" +
     "/report — گزارش امروزِ من\n" +
+    "/undo — برگرداندن آخرین چیزی که ثبت کردم\n" +
     "/close — پایان روزِ من\n" +
     "/month — خروجی اکسل ماهانه\n" +
     "/members — اعضای ثبت‌شده\n" +
@@ -66,6 +68,10 @@ export const MSG = {
   notMyButton: "این دکمه برای عضو دیگری است.",
 
   noOpenDay: "امروز هنوز گزارشی از شما ثبت نشده.",
+  nothingToUndo: "چیزی برای برگرداندن نیست.",
+  undone:
+    "↩️ آخرین ثبتِ شما برگردانده شد.\n" +
+    "شرح‌ها از روی متن پیام‌ها بازسازی شدند؛ برای جمع‌بندی هوشمند دوباره /report بزنید.",
   noDataForMonth: "برای این ماه گزارشی ثبت نشده است.",
   noMonths: "هنوز داده‌ای برای گزارش‌گیری وجود ندارد.",
 

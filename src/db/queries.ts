@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   members,
@@ -300,6 +300,23 @@ export async function getDayMessages(dayId: number): Promise<string[]> {
   return rows
     .map((r) => (r.text ?? r.transcript ?? "").trim())
     .filter(Boolean);
+}
+
+/**
+ * آخرین پیام خامِ یک روز را پاک می‌کند (برای /undo).
+ * true یعنی چیزی برای پاک‌کردن بود.
+ */
+export async function deleteLastRawMessage(dayId: number): Promise<boolean> {
+  const db = getDb();
+  const rows = await db
+    .select({ id: rawMessages.id })
+    .from(rawMessages)
+    .where(eq(rawMessages.memberDayId, dayId))
+    .orderBy(desc(rawMessages.id))
+    .limit(1);
+  if (!rows[0]) return false;
+  await db.delete(rawMessages).where(eq(rawMessages.id, rows[0].id));
+  return true;
 }
 
 // ── قطعه‌های فعالیت ───────────────────────────────────────

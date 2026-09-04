@@ -228,3 +228,32 @@ test("«من» ابتدای شرح حذف می‌شود", () => {
     "فیش های مالی رو ثبت و کد گذاری کردم",
   );
 });
+
+// ── قاعده‌ی تازه: هر پیامی گزارش است مگر آشکارا گپ باشد ──
+
+test("گزارشِ اسمی (بدون فعل) دیگر دور ریخته نمی‌شود", () => {
+  const reports = [
+    "پیگیری کارهای ساختمان آمود برای رفع نواقص",
+    "هماهنگی با پیمانکار",
+    "بازدید از سایت",
+    "امروز جلسه داشتیم",
+  ];
+  for (const t of reports) {
+    assert.equal(isReportable(parseMessage(t).events), true, t);
+  }
+});
+
+test("تعارف و گپ همچنان ثبت نمی‌شود", () => {
+  const chit = [
+    "سلام", "ممنون", "باشه", "چشم", "خب", "👍", "😅", ".",
+    "اوکی داداش", "سلام خسته نباشید", "دمت گرم", "خیلی ممنون",
+  ];
+  for (const t of chit) {
+    assert.equal(isReportable(parseMessage(t).events), false, t);
+  }
+});
+
+test("پیامِ ساعت‌دار همیشه گزارش است، هرچقدر کوتاه", () => {
+  assert.equal(isReportable(parseMessage("ساعت ۵ رفتم").events), true);
+  assert.equal(isReportable(parseMessage("رفتم دفتر").events), true);
+});

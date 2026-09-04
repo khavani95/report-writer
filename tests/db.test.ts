@@ -14,6 +14,7 @@ import {
   ensureToday,
   ingestMessage,
   resolveTarget,
+  undoLast,
 } from "../src/services/member-day";
 import type { Member, MemberDay } from "../src/db/schema";
 
@@ -336,4 +337,54 @@ test("روزِ بازِ امروز دوباره باز نمی‌شود", async (
   }
   assert.equal(ctx.reopened, false);
   assert.equal(mock.of("update").length, 0);
+});
+
+test("/undo آخرین پیام را پاک و زنجیره را از نو می‌سازد", async () => {
+  // ستون‌های هر ردیف باید دقیقاً با ستون‌های همان select بخواند
+  const RAW = (text: string): MockRow => ({
+    text: ["text", text],
+    transcript: ["text", null],
+  });
+  const mock = installNeonMock((call) => {
+    const s = call.sql.trim().toLowerCase();
+    if (!s.startsWith("select")) return [];
+    // نخستین select فقط شناسه‌ی آخرین پیام را می‌خواهد
+    if (s.includes('"raw_messages"') && s.includes("limit")) {
+      return [{ id: ["int4", "9"] } as MockRow];
+    }
+    if (s.includes('"raw_messages"')) {
+      return [
+        RAW("ساعت 9 اومدم همت"),
+        RAW("صورت وضعیت رو رسیدگی کردم"),
+      ];
+    }
+    return [];
+  });
+
+  let res;
+  try {
+    res = await undoLast(TODAY);
+  } finally {
+    mock.restore();
+  }
+
+  assert.equal(res.removed, true);
+  // زنجیره فقط از دو پیامِ باقی‌مانده ساخته شده
+  assert.equal(res.segments.length, 1);
+  assert.equal(res.segments[0].place, "همت");
+  assert.equal(res.segments[0].startTime, "09:00");
+  assert.equal(res.segments[0].description, "صورت وضعیت رو رسیدگی کردم");
+  assert.equal(mock.of("delete").length, 2, "یک حذف پیام + یک حذف قطعه‌ها");
+});
+
+test("/undo روی روزِ خالی چیزی را خراب نمی‌کند", async () => {
+  const mock = installNeonMock(() => []);
+  let res;
+  try {
+    res = await undoLast(TODAY);
+  } finally {
+    mock.restore();
+  }
+  assert.equal(res.removed, false);
+  assert.equal(mock.of("delete").length, 0, "هیچ حذفی انجام نمی‌شود");
 });

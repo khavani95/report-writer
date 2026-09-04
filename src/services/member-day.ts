@@ -14,11 +14,13 @@ import {
   getSegments,
   replaceSegments,
   getDayMessages,
+  deleteLastRawMessage,
   saveRawMessage,
 } from "@/db/queries";
 import { toJalali, type JalaliInfo } from "@/lib/jalali";
 import {
   applyEvents,
+  buildSegments,
   parseMessage,
   splitLeadingName,
   isReportable,
@@ -234,6 +236,34 @@ export async function buildDay(
     ...dayBounds(plan.segments),
     aiFailed: plan.aiFailed,
     aiIncomplete: plan.aiIncomplete,
+  };
+}
+
+/**
+ * برگرداندن آخرین ثبتِ همین روز.
+ *
+ * چون پیام‌های خام منبع حقیقت‌اند و زنجیره از رویشان ساخته می‌شود، «برگشت»
+ * یعنی حذف آخرین پیام و ساختنِ دوباره‌ی زنجیره از بقیه — نتیجه دقیقاً همان
+ * چیزی است که اگر آن پیام فرستاده نشده بود. پس به پشته‌ی undo نیازی نیست.
+ *
+ * ⚠️ بازسازی قطعی است؛ شرح‌هایی که هوش مصنوعی در /report روان کرده بود از
+ * بین می‌روند و با /report دوباره ساخته می‌شوند.
+ */
+export async function undoLast(
+  day: MemberDay,
+): Promise<DayResult & { removed: boolean }> {
+  const removed = await deleteLastRawMessage(day.id);
+  if (!removed) return { ...(await readDay(day)), removed: false };
+
+  const messages = await getDayMessages(day.id);
+  const segments = buildSegments(messages);
+  await replaceSegments(day.id, segments);
+  return {
+    segments,
+    ...dayBounds(segments),
+    aiFailed: false,
+    aiIncomplete: false,
+    removed: true,
   };
 }
 

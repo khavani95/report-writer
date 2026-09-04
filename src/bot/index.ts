@@ -30,6 +30,7 @@ import {
   ensureToday,
   ingestMessage,
   buildDay,
+  undoLast,
 } from "@/services/member-day";
 import { parseMessage, isReportable } from "@/ai/segments";
 import { transcribeAudio } from "@/ai/voice";
@@ -143,6 +144,20 @@ function registerHandlers(bot: Bot) {
 
   bot.command("close", async (ctx) => {
     await sendDayReport(ctx, { close: true });
+  });
+
+  bot.command("undo", async (ctx) => {
+    const member = await senderMember(ctx);
+    if (!member) return await ctx.reply(MSG.noProfile);
+    const day = await getDayByDate(member.id, toJalali().key);
+    if (!day) return await ctx.reply(MSG.noOpenDay);
+
+    const res = await undoLast(day);
+    if (!res.removed) return await ctx.reply(MSG.nothingToUndo);
+    await ctx.reply(MSG.undone);
+    await ctx.reply(formatDayReport(member, day, res.segments, res), {
+      reply_markup: reportKeyboard(ctx.from!.id, day.id),
+    });
   });
 
   bot.command("month", async (ctx) => {
