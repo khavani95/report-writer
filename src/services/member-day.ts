@@ -9,15 +9,18 @@ import {
   getOpenDay,
   openDay,
   closeDay,
+  reopenDay,
   staleOpenDays,
   getSegments,
   replaceSegments,
   getDayMessages,
+  deleteLastRawMessage,
   saveRawMessage,
 } from "@/db/queries";
 import { toJalali, type JalaliInfo } from "@/lib/jalali";
 import {
   applyEvents,
+  buildSegments,
   parseMessage,
   splitLeadingName,
   isReportable,
@@ -121,6 +124,8 @@ export interface DayContext {
   day: MemberDay;
   /** روزهای قبلیِ بازمانده که همین حالا نهایی شدند */
   autoClosed: MemberDay[];
+  /** روزِ امروز بسته بود و با همین پیام دوباره باز شد */
+  reopened: boolean;
 }
 
 /**
@@ -141,7 +146,18 @@ export async function ensureToday(
     await Promise.all(stale.map((d) => closeDay(d.id)));
   }
   const day = await openDay(member.id, j);
-  return { day, autoClosed: stale };
+
+  // گزارشِ تکمیلی بعد از «پایان روز» نباید بی‌صدا به روزِ بسته بچسبد؛
+  // وگرنه وضعیت روز با محتوایش نمی‌خواند.
+  if (day.status === "closed") {
+    await reopenDay(day.id);
+    return {
+      day: { ...day, status: "open", closedAt: null },
+      autoClosed: stale,
+      reopened: true,
+    };
+  }
+  return { day, autoClosed: stale, reopened: false };
 }
 
 /**
@@ -220,6 +236,34 @@ export async function buildDay(
     ...dayBounds(plan.segments),
     aiFailed: plan.aiFailed,
     aiIncomplete: plan.aiIncomplete,
+  };
+}
+
+/**
+ * برگرداندن آخرین ثبتِ همین روز.
+ *
+ * چون پیام‌های خام منبع حقیقت‌اند و زنجیره از رویشان ساخته می‌شود، «برگشت»
+ * یعنی حذف آخرین پیام و ساختنِ دوباره‌ی زنجیره از بقیه — نتیجه دقیقاً همان
+ * چیزی است که اگر آن پیام فرستاده نشده بود. پس به پشته‌ی undo نیازی نیست.
+ *
+ * ⚠️ بازسازی قطعی است؛ شرح‌هایی که هوش مصنوعی در /report روان کرده بود از
+ * بین می‌روند و با /report دوباره ساخته می‌شوند.
+ */
+export async function undoLast(
+  day: MemberDay,
+): Promise<DayResult & { removed: boolean }> {
+  const removed = await deleteLastRawMessage(day.id);
+  if (!removed) return { ...(await readDay(day)), removed: false };
+
+  const messages = await getDayMessages(day.id);
+  const segments = buildSegments(messages);
+  await replaceSegments(day.id, segments);
+  return {
+    segments,
+    ...dayBounds(segments),
+    aiFailed: false,
+    aiIncomplete: false,
+    removed: true,
   };
 }
 

@@ -4,7 +4,7 @@ import { describeError } from "@/lib/log";
 import {
   COMMANDS,
   MSG,
-  nameKeyboard,
+  identityKeyboard,
   reportKeyboard,
   monthKeyboard,
 } from "./text";
@@ -19,6 +19,7 @@ import {
   getMemberById,
   getDayByDate,
   getDayById,
+  listUnlinkedMembers,
   availableMonths,
   loadMonth,
 } from "@/db/queries";
@@ -29,6 +30,7 @@ import {
   ensureToday,
   ingestMessage,
   buildDay,
+  undoLast,
 } from "@/services/member-day";
 import { parseMessage, isReportable } from "@/ai/segments";
 import { transcribeAudio } from "@/ai/voice";
@@ -144,6 +146,20 @@ function registerHandlers(bot: Bot) {
     await sendDayReport(ctx, { close: true });
   });
 
+  bot.command("undo", async (ctx) => {
+    const member = await senderMember(ctx);
+    if (!member) return await ctx.reply(MSG.noProfile);
+    const day = await getDayByDate(member.id, toJalali().key);
+    if (!day) return await ctx.reply(MSG.noOpenDay);
+
+    const res = await undoLast(day);
+    if (!res.removed) return await ctx.reply(MSG.nothingToUndo);
+    await ctx.reply(MSG.undone);
+    await ctx.reply(formatDayReport(member, day, res.segments, res), {
+      reply_markup: reportKeyboard(ctx.from!.id, day.id),
+    });
+  });
+
   bot.command("month", async (ctx) => {
     const months = await availableMonths(ctx.chat.id);
     if (!months.length) return await ctx.reply(MSG.noMonths);
@@ -188,6 +204,15 @@ function registerHandlers(bot: Bot) {
 
     if (kind === "name") {
       await finishName(ctx, displayName(ctx.from));
+      return;
+    }
+
+    // «من همان عضوم که دیگران برایم گزارش داده‌اند»
+    if (kind === "link") {
+      const member = await getMemberById(Number(rest[1]));
+      if (!member || member.userId) return;
+      await updateMember(member.id, { userId: presser });
+      await askRoleNext(ctx, member.fullName);
       return;
     }
 
@@ -289,9 +314,13 @@ async function onMessage(
   const sender = await senderMember(ctx);
   if (!sender) {
     const suggestion = displayName(ctx.from);
+    const unlinked = await listUnlinkedMembers(chatId);
     await setPhase(chatId, userId, "await_name", text);
-    await ctx.reply(MSG.askName(suggestion), {
-      reply_markup: suggestion ? nameKeyboard(userId, suggestion) : undefined,
+    await ctx.reply(MSG.askName(suggestion, unlinked.length > 0), {
+      reply_markup:
+        suggestion || unlinked.length
+          ? identityKeyboard(userId, suggestion, unlinked)
+          : undefined,
     });
     return;
   }
@@ -305,9 +334,23 @@ async function finishName(ctx: Context, name: string) {
   const clean = name.trim();
   if (!clean) return;
   const member = await registerMember(ctx.chat.id, ctx.from.id, clean);
+  await askRoleNext(ctx, member.fullName);
+}
+
+/**
+ * گام بعدیِ شناسایی: پرسیدن سمت.
+ * گزارشی که پیش از پرسیدنِ نام فرستاده شده (`pendingText`) باید حفظ شود.
+ */
+async function askRoleNext(ctx: Context, fullName: string) {
+  if (!ctx.chat || !ctx.from) return;
   const state = await getState(ctx.chat.id, ctx.from.id);
-  await setPhase(ctx.chat.id, ctx.from.id, "await_role", state?.pendingText ?? null);
-  await ctx.reply(MSG.askRole(member.fullName));
+  await setPhase(
+    ctx.chat.id,
+    ctx.from.id,
+    "await_role",
+    state?.pendingText ?? null,
+  );
+  await ctx.reply(MSG.askRole(fullName));
 }
 
 /** چسباندن یک پیام به زنجیره‌ی روزِ صاحبش */
@@ -319,12 +362,13 @@ async function ingestReport(
 ) {
   const chatId = ctx.chat!.id;
   const target = await resolveTarget(chatId, sender, text);
-  const { day, autoClosed } = await ensureToday(target.member);
+  const { day, autoClosed, reopened } = await ensureToday(target.member);
 
   // روزِ فراموش‌شده‌ی قبلی: بی‌صدا نهایی می‌شود، نه اینکه بات گیر کند
   if (autoClosed.length) {
     await ctx.reply(MSG.autoClosed(autoClosed.map((d) => d.dateLabel)));
   }
+  if (reopened) await ctx.reply(MSG.dayReopened(day.dateLabel));
 
   // متنِ تحلیل ممکن است نامِ ابتدای پیام را نداشته باشد؛ ردِ ممیزی همیشه
   // متنِ کاملِ اصلی است

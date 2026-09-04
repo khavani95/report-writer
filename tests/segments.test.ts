@@ -162,3 +162,98 @@ test("نام حداکثر دو واژه است", () => {
   assert.equal(name, "آیدین نوری");
   assert.equal(rest, "ساعت 7 رفت باغ موزه");
 });
+
+// ── مشکل‌هایی که در گروه واقعی دیده شد ──────────────────
+
+test("ساعتِ دارای «:» خوانده می‌شود (۹:۳۰ و ۱۷:۰۰)", () => {
+  assert.deepEqual(parseMessage("ساعت ٩:٣٠ اومدم همت").events, [
+    { kind: "arrive", time: "09:30", place: "همت" },
+  ]);
+  assert.deepEqual(parseMessage("ساعت 9:30 اومدم همت").events, [
+    { kind: "arrive", time: "09:30", place: "همت" },
+  ]);
+  assert.deepEqual(parseMessage("ساعت ۱۷:۰۰ رفتم").events, [
+    { kind: "leave", time: "17:00" },
+  ]);
+  assert.deepEqual(parseMessage("ساعت ١٧ رفتم").events, [
+    { kind: "leave", time: "17:00" },
+  ]);
+});
+
+test("پیامِ چندخطی: هم شرح ثبت می‌شود هم ساعت خروج", () => {
+  assert.deepEqual(
+    parseMessage("بعد از ظهر رزومه رو طراحی کردیم\nساعت ۱۷:۰۰ رفتم").events,
+    [
+      { kind: "note", text: "بعد از ظهر رزومه رو طراحی کردیم" },
+      { kind: "leave", time: "17:00" },
+    ],
+  );
+});
+
+test("تکرارِ رسیدن به همان محل، ساعت را تصحیح می‌کند نه اینکه قطعه بسازد", () => {
+  // دنباله‌ی واقعیِ گروه: عضو دو بار خودش را تصحیح کرد
+  const segments = buildSegments([
+    "سلام من ساعت ٩:٣٠ اومدم همت",
+    "ساعت ٩:٣٠ اومدم همت",
+    "ساعت ٩ اومدم همت",
+    "امروز کارهای ساختمان آمود رو انجام دادم",
+    "با لاچینی در مورد تسویه صحبت کردیم",
+    "ساعت ١٧ رفتم",
+  ]);
+  assert.equal(segments.length, 1, "نباید قطعه‌ی شبح ساخته شود");
+  assert.equal(segments[0].place, "همت");
+  assert.equal(segments[0].startTime, "09:00", "آخرین تصحیح مبناست");
+  assert.equal(segments[0].endTime, "17:00");
+  assert.equal(
+    segments[0].description,
+    "کارهای ساختمان آمود رو انجام دادم؛ با لاچینی در مورد تسویه صحبت کردیم",
+  );
+});
+
+test("بازگشت به همان محل بعد از ثبت کار، قطعه‌ی تازه است", () => {
+  const segments = buildSegments([
+    "ساعت 8 اومدم همت",
+    "صورت وضعیت رو رسیدگی کردم",
+    "ساعت 14 رفتم همت",
+  ]);
+  assert.equal(segments.length, 2, "قطعه‌ی دارای شرح ادغام نمی‌شود");
+  assert.equal(segments[0].endTime, "14:00");
+  assert.equal(segments[1].startTime, "14:00");
+});
+
+test("«من» ابتدای شرح حذف می‌شود", () => {
+  const { events } = parseMessage("من فیش های مالی رو ثبت و کد گذاری کردم");
+  assert.equal(
+    (events[0] as { text: string }).text,
+    "فیش های مالی رو ثبت و کد گذاری کردم",
+  );
+});
+
+// ── قاعده‌ی تازه: هر پیامی گزارش است مگر آشکارا گپ باشد ──
+
+test("گزارشِ اسمی (بدون فعل) دیگر دور ریخته نمی‌شود", () => {
+  const reports = [
+    "پیگیری کارهای ساختمان آمود برای رفع نواقص",
+    "هماهنگی با پیمانکار",
+    "بازدید از سایت",
+    "امروز جلسه داشتیم",
+  ];
+  for (const t of reports) {
+    assert.equal(isReportable(parseMessage(t).events), true, t);
+  }
+});
+
+test("تعارف و گپ همچنان ثبت نمی‌شود", () => {
+  const chit = [
+    "سلام", "ممنون", "باشه", "چشم", "خب", "👍", "😅", ".",
+    "اوکی داداش", "سلام خسته نباشید", "دمت گرم", "خیلی ممنون",
+  ];
+  for (const t of chit) {
+    assert.equal(isReportable(parseMessage(t).events), false, t);
+  }
+});
+
+test("پیامِ ساعت‌دار همیشه گزارش است، هرچقدر کوتاه", () => {
+  assert.equal(isReportable(parseMessage("ساعت ۵ رفتم").events), true);
+  assert.equal(isReportable(parseMessage("رفتم دفتر").events), true);
+});

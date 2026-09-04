@@ -22,6 +22,7 @@ export const COMMANDS = [
   { command: "report", description: "گزارش امروز من" },
   { command: "close", description: "پایان روز من" },
   { command: "month", description: "خروجی اکسل ماهانه" },
+  { command: "undo", description: "برگرداندن آخرین ثبت من" },
   { command: "members", description: "اعضای ثبت‌شده" },
   { command: "me", description: "نام و سمت من" },
   { command: "start", description: "راهنما" },
@@ -38,6 +39,7 @@ export const MSG = {
     "می‌توانید به‌جای دیگری هم گزارش بدهید: «ایدین امروز ساعت ۷ رفت باغ موزه».\n\n" +
     "دستورها:\n" +
     "/report — گزارش امروزِ من\n" +
+    "/undo — برگرداندن آخرین چیزی که ثبت کردم\n" +
     "/close — پایان روزِ من\n" +
     "/month — خروجی اکسل ماهانه\n" +
     "/members — اعضای ثبت‌شده\n" +
@@ -45,11 +47,13 @@ export const MSG = {
 
   help: "برای دیدن راهنما /start را بزنید.",
 
-  askName: (suggestion: string) =>
+  askName: (suggestion: string, hasKnownNames: boolean) =>
     "قبل از ثبت گزارش، نام کامل شما را لازم دارم.\n" +
-    (suggestion
-      ? `نام تلگرام شما «${suggestion}» است. اگر درست است دکمه را بزنید، وگرنه نام کامل را بنویسید.`
-      : "نام و نام‌خانوادگی خود را بنویسید."),
+    (hasKnownNames
+      ? "اگر یکی از نام‌های زیر شما هستید دکمه‌اش را بزنید، وگرنه نام کامل خود را بنویسید."
+      : suggestion
+        ? `نام تلگرام شما «${suggestion}» است. اگر درست است دکمه را بزنید، وگرنه نام کامل را بنویسید.`
+        : "نام و نام‌خانوادگی خود را بنویسید."),
 
   askRole: (name: string) =>
     `ممنون ${name} 🙏\nسمت شما چیست؟ (مثلاً: مدیرعامل، عضو هیئت‌مدیره، مدیر فنی)`,
@@ -64,10 +68,17 @@ export const MSG = {
   notMyButton: "این دکمه برای عضو دیگری است.",
 
   noOpenDay: "امروز هنوز گزارشی از شما ثبت نشده.",
+  nothingToUndo: "چیزی برای برگرداندن نیست.",
+  undone:
+    "↩️ آخرین ثبتِ شما برگردانده شد.\n" +
+    "شرح‌ها از روی متن پیام‌ها بازسازی شدند؛ برای جمع‌بندی هوشمند دوباره /report بزنید.",
   noDataForMonth: "برای این ماه گزارشی ثبت نشده است.",
   noMonths: "هنوز داده‌ای برای گزارش‌گیری وجود ندارد.",
 
   dayClosed: (label: string) => `✅ روز «${label}» بسته شد.`,
+  dayReopened: (label: string) =>
+    `🔓 روز «${label}» بسته شده بود؛ با این گزارش دوباره باز شد.\n` +
+    "در پایان دوباره /close را بزنید.",
   autoClosed: (labels: string[]) =>
     `ℹ️ روز${labels.length > 1 ? "های" : ""} ${labels.join("، ")} هنوز باز بود؛ ` +
     "نهایی‌اش کردم و روز تازه را باز کردم.",
@@ -90,12 +101,25 @@ export const MSG = {
   error: "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید.",
 };
 
-/** دکمه‌ی «همین نام درست است» — شناسه‌ی صاحبِ دکمه داخلش است */
-export function nameKeyboard(userId: number, suggestion: string) {
-  return new InlineKeyboard().text(
-    `✅ «${suggestion}» درست است`,
-    `name:${userId}`,
-  );
+/**
+ * دکمه‌های شناسایی — شناسه‌ی صاحبِ دکمه داخل داده است تا عضو دیگری نتواند
+ * جای او را انتخاب کند.
+ *
+ * عضوهایی که دیگران برایشان گزارش داده‌اند («آیدین نوری») بالاتر از نام
+ * تلگرام می‌آیند؛ وگرنه کسی که نام تلگرامش لاتین است دکمه را می‌زند و
+ * یک هویتِ دومِ جدا از گزارش‌های قبلی‌اش ساخته می‌شود.
+ */
+export function identityKeyboard(
+  userId: number,
+  suggestion: string,
+  unlinked: Array<{ id: number; fullName: string }>,
+) {
+  const kb = new InlineKeyboard();
+  for (const m of unlinked.slice(0, 6)) {
+    kb.text(`👤 ${m.fullName}`, `link:${userId}:${m.id}`).row();
+  }
+  if (suggestion) kb.text(`✅ «${suggestion}» درست است`, `name:${userId}`);
+  return kb;
 }
 
 /** دکمه‌های زیر گزارش روزانه */

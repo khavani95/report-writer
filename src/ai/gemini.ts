@@ -83,6 +83,11 @@ export async function generateWithRetry(
         throw lastError;
       }
       try {
+        // ⚠️ مهلت روی خودِ فراخوانی، نه فقط بین تلاش‌ها.
+        // بدون این، یک تماسِ گیرکرده کلِ بودجه‌ی ۵۵ ثانیه‌ای وبهوک را
+        // می‌خورد و تابع سرورلس کشته می‌شود؛ آن‌وقت کاربر نه پاسخ می‌گیرد
+        // نه پیام خطا، و آپدیتِ تحویل‌شده‌ی دوباره هم بی‌صدا رد می‌شود.
+        const remaining = Math.max(1_000, deadline - Date.now());
         const res = await client.models.generateContent({
           model,
           contents: [
@@ -95,6 +100,7 @@ export async function generateWithRetry(
               : undefined,
             responseSchema: opts.responseSchema as never,
             temperature: opts.temperature ?? 0,
+            abortSignal: AbortSignal.timeout(remaining),
           },
         });
         const text = res.text;
