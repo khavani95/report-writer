@@ -9,6 +9,7 @@ import {
   getOpenDay,
   openDay,
   closeDay,
+  reopenDay,
   staleOpenDays,
   getSegments,
   replaceSegments,
@@ -121,6 +122,8 @@ export interface DayContext {
   day: MemberDay;
   /** روزهای قبلیِ بازمانده که همین حالا نهایی شدند */
   autoClosed: MemberDay[];
+  /** روزِ امروز بسته بود و با همین پیام دوباره باز شد */
+  reopened: boolean;
 }
 
 /**
@@ -141,7 +144,18 @@ export async function ensureToday(
     await Promise.all(stale.map((d) => closeDay(d.id)));
   }
   const day = await openDay(member.id, j);
-  return { day, autoClosed: stale };
+
+  // گزارشِ تکمیلی بعد از «پایان روز» نباید بی‌صدا به روزِ بسته بچسبد؛
+  // وگرنه وضعیت روز با محتوایش نمی‌خواند.
+  if (day.status === "closed") {
+    await reopenDay(day.id);
+    return {
+      day: { ...day, status: "open", closedAt: null },
+      autoClosed: stale,
+      reopened: true,
+    };
+  }
+  return { day, autoClosed: stale, reopened: false };
 }
 
 /**

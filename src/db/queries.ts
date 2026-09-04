@@ -114,6 +114,22 @@ export async function resolveMemberByName(
   return createMember({ chatId, fullName: name });
 }
 
+/** عضوهایی که دیگران برایشان گزارش داده‌اند ولی خودشان هنوز پیام نداده‌اند */
+export async function listUnlinkedMembers(chatId: number): Promise<Member[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(members)
+    .where(
+      and(
+        eq(members.chatId, chatId),
+        eq(members.isActive, true),
+        isNull(members.userId),
+      ),
+    )
+    .orderBy(members.fullName);
+}
+
 /**
  * عضوی «فقط نام» که با نامِ این کاربر می‌خواند و هنوز آی‌دی ندارد.
  * وقتی کسی که قبلاً دیگران برایش گزارش داده‌اند خودش پیام می‌دهد، باید به

@@ -283,3 +283,57 @@ test("نامِ ناشناس با فعل حرکتی، عضوِ «فقط نام» 
   assert.equal(target.onBehalf, true);
   assert.equal(mock.of("insert").length, 1);
 });
+
+test("پیامِ تازه بعد از «پایان روز»، روز را دوباره باز می‌کند", async () => {
+  const closed: MockRow = { ...DAY_ROW, status: ["text", "closed"] };
+  const mock = installNeonMock((call) => {
+    const s = call.sql.trim().toLowerCase();
+    if (s.startsWith("select") && s.includes('"member_days"')) return [];
+    if (s.startsWith('insert into "member_days"')) return [closed];
+    return [];
+  });
+
+  let ctx;
+  try {
+    ctx = await ensureToday(MEMBER, {
+      key: "1405/05/12",
+      label: "شنبه ۱۲ مرداد ۱۴۰۵",
+      gregorian: new Date(),
+      jy: 1405,
+      jm: 5,
+      jd: 12,
+    });
+  } finally {
+    mock.restore();
+  }
+
+  assert.equal(ctx.reopened, true);
+  assert.equal(ctx.day.status, "open");
+  const update = mock.of("update");
+  assert.equal(update.length, 1);
+  assert.ok(update[0].params.map(String).includes("open"));
+});
+
+test("روزِ بازِ امروز دوباره باز نمی‌شود", async () => {
+  const mock = installNeonMock((call) => {
+    const s = call.sql.trim().toLowerCase();
+    if (s.startsWith("select") && s.includes('"member_days"')) return [];
+    if (s.startsWith('insert into "member_days"')) return [DAY_ROW];
+    return [];
+  });
+  let ctx;
+  try {
+    ctx = await ensureToday(MEMBER, {
+      key: "1405/05/12",
+      label: "شنبه ۱۲ مرداد ۱۴۰۵",
+      gregorian: new Date(),
+      jy: 1405,
+      jm: 5,
+      jd: 12,
+    });
+  } finally {
+    mock.restore();
+  }
+  assert.equal(ctx.reopened, false);
+  assert.equal(mock.of("update").length, 0);
+});

@@ -15,6 +15,7 @@ import {
   parseSingleTime,
   forwardInDay,
 } from "@/services/time-parse";
+import { normalizeName } from "@/lib/text-normalize";
 
 export type SegmentEvent =
   /** رسیدن به یک محل — قطعه‌ی تازه‌ای باز می‌کند */
@@ -94,7 +95,10 @@ const FIRST_PERSON =
 const THIRD_PERSON_ANY = /(رفت|اومد|آمد|امد|رسید|کرد|بود|شد|داد|انجام|داشت)/;
 
 /** واژه‌هایی که ابتدای شرح می‌آیند و اطلاعاتی ندارند */
-const NOTE_PREFIXES = ["اونجا", "آنجا", "اینجا", "همونجا", "همانجا", "بعدش", "سپس", "هم", "و"];
+const NOTE_PREFIXES = [
+  "اونجا", "آنجا", "اینجا", "همونجا", "همانجا",
+  "بعدش", "سپس", "هم", "و", "من", "ما",
+];
 
 /** حذف نویسه‌های زینتی و یکسان‌سازی حروف برای مقایسه‌ی واژه‌ها */
 function normalizeToken(t: string): string {
@@ -102,7 +106,11 @@ function normalizeToken(t: string): string {
     .replace(/[ىيﻱﻲ]/g, "ی")
     .replace(/ك/g, "ک")
     .replace(/[‌‍‎‏]/g, "")
-    .replace(/[.,،؛;:!؟?"'«»()]/g, "")
+    // ⚠️ «:» عمداً در این فهرست نیست. وقتی حذف می‌شد، «۹:۳۰» به «۹۳۰»
+    // تبدیل و از الگوی ساعت رد می‌شد؛ یعنی هیچ ساعتی که دو نقطه داشت
+    // خوانده نمی‌شد. فقط دو نقطه‌ی ابتدا/انتهای واژه («همت:») پاک می‌شود.
+    .replace(/[.,،؛;!؟?"'«»()]/g, "")
+    .replace(/^:+|:+$/g, "")
     .trim();
 }
 
@@ -420,6 +428,14 @@ function mergeNotes(events: SegmentEvent[]): SegmentEvent[] {
 
 // ── ساختنِ زنجیره ─────────────────────────────────────────
 
+/** آیا این دو، یک محل‌اند؟ («همت» و «پروژه همت» یکی‌اند) */
+function samePlace(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  const na = normalizeName(a);
+  const nb = normalizeName(b);
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
 /** آخرین ساعتِ شناخته‌شده‌ی زنجیره (برای تصحیح ساعت‌های عقب‌رفته) */
 function lastKnownTime(segments: Segment[]): string | null {
   for (let i = segments.length - 1; i >= 0; i--) {
@@ -451,7 +467,26 @@ export function applyEvents(
     const last = out[out.length - 1] as Segment | undefined;
 
     if (ev.kind === "arrive") {
-      const time = ev.time ? forwardInDay(ev.time, lastKnownTime(out)) : null;
+      /**
+       * «رسیدنِ» دوباره به همان محل، وقتی هنوز کاری برایش ثبت نشده، یعنی
+       * عضو دارد ساعت خودش را تصحیح می‌کند — نه اینکه دوباره جایی رفته.
+       * در گروه واقعی دیده شد: «ساعت ۹:۳۰ اومدم همت» و بعد «ساعت ۹ اومدم
+       * همت»؛ بدون این قاعده سه قطعه‌ی «همت» ساخته می‌شد که دوتاش خالی بود
+       * و در جدول ماهانه هم دیده می‌شد.
+       */
+      const sameSpot = Boolean(
+        last && !last.description && !last.endTime && samePlace(last.place, ev.place),
+      );
+      // برای تصحیح، ساعتِ خودِ همین قطعه مبنای «رو به جلو» نیست؛ وگرنه
+      // اصلاحِ ۹:۳۰ به ۹:۰۰ به ۲۱:۰۰ تفسیر می‌شد.
+      const baseline = lastKnownTime(sameSpot ? out.slice(0, -1) : out);
+      const time = ev.time ? forwardInDay(ev.time, baseline) : null;
+
+      if (sameSpot && last) {
+        if (time) last.startTime = time;
+        if (ev.place && !last.place) last.place = ev.place;
+        continue;
+      }
       // قطعه‌ی «فقط شرح» (بدون محل و ساعت) هنوز جا دارد؛ همان را کامل می‌کنیم
       if (last && !last.place && !last.startTime && !last.endTime) {
         last.place = ev.place;

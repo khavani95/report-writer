@@ -7,13 +7,22 @@ function t(time: string | null): string {
   return time ? toFaDigits(time) : "—";
 }
 
-/** یک قطعه در یک خط: «۰۹:۰۰–۱۲:۰۰ | پروژه همت — شرح» */
+/**
+ * یک قطعه در یک خط: «۰۹:۰۰–۱۷:۰۰ پروژه همت — شرح».
+ * وقتی ساعت ناقص است، به‌جای خط تیره‌ی گنگ، صریح نوشته می‌شود.
+ */
 function segmentLine(s: Segment): string {
-  const time =
-    s.startTime || s.endTime ? `${t(s.startTime)}–${t(s.endTime)}` : "بدون ساعت";
-  const place = s.place ? ` ${s.place}` : "";
-  const desc = s.description ? ` — ${s.description}` : "";
-  return `▪️ ${time}${place}${desc}`;
+  let time = "";
+  if (s.startTime && s.endTime) time = `${t(s.startTime)}–${t(s.endTime)} `;
+  else if (s.startTime) time = `از ${t(s.startTime)} `;
+  else if (s.endTime) time = `تا ${t(s.endTime)} `;
+
+  const place = s.place ?? "";
+  const desc = s.description
+    ? (place ? ` — ${s.description}` : s.description)
+    : "";
+  const body = `${time}${place}${desc}`.trim();
+  return `▪️ ${body || "بدون جزئیات"}`;
 }
 
 /** گزارش روزانه‌ی یک عضو */
@@ -45,7 +54,12 @@ export function formatAck(segments: Segment[], onBehalfOf?: string): string {
   const last = segments[segments.length - 1];
   const who = onBehalfOf ? `📝 «${onBehalfOf}»: ` : "✅ ";
   if (!last) return `${who}ثبت شد.`;
-  return `${who}${segmentLine(last).replace(/^▪️ /, "")}`;
+  const line = segmentLine(last).replace(/^▪️ /, "");
+  // وقتی روز چند مقصد دارد، تعدادش هم می‌آید تا عضو بفهمد زنجیره چند حلقه
+  // شده و قطعه‌ی ناخواسته پشتِ «آخرین قطعه» پنهان نماند.
+  const count =
+    segments.length > 1 ? ` (امروز ${toFaDigits(segments.length)} مقصد)` : "";
+  return `${who}${line}${count}`;
 }
 
 /** فهرست اعضا */
