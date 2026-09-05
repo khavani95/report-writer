@@ -14,6 +14,10 @@ import {
   normalizeDigits,
   parseSingleTime,
   forwardInDay,
+  readNumber,
+  readMinutes,
+  isNumberWord,
+  isFractionWord,
 } from "@/services/time-parse";
 import { normalizeName } from "@/lib/text-normalize";
 
@@ -157,11 +161,10 @@ function isLeaveVerb(t: string): boolean {
   return LEAVE_VERBS.includes(normalizeToken(t));
 }
 
-/** آیا این واژه می‌تواند شروع یک عبارتِ زمانی باشد؟ */
+/** آیا این واژه می‌تواند شروع یک عبارتِ زمانی باشد؟ («۵»، «پنج»، «ساعت») */
 function isTimeToken(t?: string): boolean {
   if (!t) return false;
-  const n = normalizeToken(t);
-  return n === "ساعت" || /^\d{1,2}(:\d{2})?$/.test(n);
+  return normalizeToken(t) === "ساعت" || isNumberWord(t);
 }
 
 // ── بندبندی جمله ──────────────────────────────────────────
@@ -185,10 +188,12 @@ export function splitClauses(text: string): string[] {
     let cur: string[] = [];
     for (let i = 0; i < tokens.length; i++) {
       const t = normalizeToken(tokens[i]);
-      // «۸ و نیم» یک عبارتِ زمانی است، نه دو بند
-      const isHalfHour = normalizeToken(tokens[i + 1] ?? "") === "نیم";
+      // «۸ و نیم»، «نه و ربع» و «بیست و یک» یک عبارتِ زمانی‌اند، نه دو بند
+      const joinsNumber =
+        (isNumberWord(tokens[i - 1]) || isFractionWord(tokens[i - 1])) &&
+        (isNumberWord(tokens[i + 1]) || isFractionWord(tokens[i + 1]));
       const isConnector =
-        !isHalfHour && (t === "و" || t === "سپس" || t === "بعدش");
+        !joinsNumber && (t === "و" || t === "سپس" || t === "بعدش");
       if (isConnector && cur.length && restIsClause(tokens, i + 1)) {
         out.push(cur.join(" "));
         cur = [];
@@ -240,28 +245,42 @@ function findTime(tokens: string[]): TimeHit | null {
     const until = t === "تا";
     const isMarker = t === "ساعت" || until || t === "از";
     if (!isMarker) continue;
-    // «تا ساعت ۵» یا «ساعت ۵»
+    // «تا ساعت ۵» یا «ساعت پنج» — «حدود/تقریبا» هم رد می‌شود
     let j = i + 1;
     if (normalizeToken(tokens[j] ?? "") === "ساعت") j += 1;
-    if (!/^\d{1,2}(:\d{2})?$/.test(normalizeToken(tokens[j] ?? ""))) continue;
-    // واژه‌های «صبح/عصر/شب» و «و نیم» بعد از عدد هم بخشی از عبارت‌اند
-    let end = j + 1;
-    const expr: string[] = [tokens[j]];
+    const hour = readNumber(tokens, j);
+    if (!hour) continue;
+
+    let end = j + hour.consumed;
+    let minute: string | null = null;
+
+    // «و نیم» / «و ربع» / «و ده دقیقه»
+    const mins = readMinutes(tokens, end);
+    if (mins && !hour.text.includes(":")) {
+      minute = mins.text;
+      end += mins.consumed;
+    }
+
+    // «صبح/عصر/شب» بعد از عدد هم بخشی از عبارت است
+    const qualifiers: string[] = [];
     while (end < tokens.length) {
       const n = normalizeToken(tokens[end]);
-      if (/^(صبح|عصر|ظهر|شب|بامداد|غروب|بعدازظهر)$/.test(n)) {
-        expr.push(tokens[end]);
-        end += 1;
-        continue;
-      }
-      if (n === "و" && normalizeToken(tokens[end + 1] ?? "") === "نیم") {
-        expr.push(tokens[end], tokens[end + 1]);
-        end += 2;
-        continue;
-      }
-      break;
+      if (!/^(صبح|عصر|ظهر|شب|بامداد|غروب|بعدازظهر)$/.test(n)) break;
+      qualifiers.push(tokens[end]);
+      end += 1;
     }
-    return { expr: expr.join(" "), start: i, end, until };
+
+    // عبارت به شکل رقمی بازسازی می‌شود تا parseSingleTime دست‌نخورده بماند
+    const digits =
+      minute !== null
+        ? `${hour.text}:${minute.padStart(2, "0")}`
+        : hour.text;
+    return {
+      expr: [digits, ...qualifiers].join(" "),
+      start: i,
+      end,
+      until,
+    };
   }
   return null;
 }

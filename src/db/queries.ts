@@ -12,7 +12,7 @@ import {
   type ConversationState,
 } from "./schema";
 import type { JalaliInfo } from "@/lib/jalali";
-import { findWorkerMatch } from "@/lib/text-normalize";
+import { findWorkerMatch, namesMatch } from "@/lib/text-normalize";
 import type { Segment } from "@/ai/segments";
 
 // ── اعضا ──────────────────────────────────────────────────
@@ -88,6 +88,17 @@ export async function updateMember(
  * عضوی که با این نام صدا زده شده را پیدا می‌کند.
  * تطبیق همان مسیر روزنگار است: آیدین/ایدین/یدین یک نفرند.
  */
+/**
+ * همه‌ی عضوهایی که با این نام می‌خوانند.
+ * بیش از یکی یعنی «مبهم» — «محمد» هم به «محمد خوانی» می‌خورد هم به
+ * «محمد صادق خوانی». در این حالت نباید حدس زد و نباید عضو تازه ساخت.
+ */
+export function matchMembersByName(roster: Member[], name: string): Member[] {
+  return roster.filter((m) =>
+    [m.fullName, ...(m.aliases ?? [])].some((c) => namesMatch(c, name)),
+  );
+}
+
 export function matchMemberByName(
   roster: Member[],
   name: string,
