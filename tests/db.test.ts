@@ -40,6 +40,18 @@ const TODAY: MemberDay = {
   closedAt: null,
 };
 
+const MEMBER_ROW: MockRow = {
+  id: ["int4", "7"],
+  chat_id: ["int8", "-100"],
+  user_id: ["int8", "555"],
+  full_name: ["text", "محمد خوانی"],
+  aliases: ["jsonb", "[]"],
+  role: ["text", "مدیرعامل"],
+  profile_status: ["text", "complete"],
+  is_active: ["bool", "t"],
+  created_at: ["timestamp", "2026-08-01 08:00:00"],
+};
+
 const DAY_ROW: MockRow = {
   id: ["int4", "42"],
   member_id: ["int4", "7"],
@@ -387,4 +399,26 @@ test("/undo روی روزِ خالی چیزی را خراب نمی‌کند", as
   }
   assert.equal(res.removed, false);
   assert.equal(mock.of("delete").length, 0, "هیچ حذفی انجام نمی‌شود");
+});
+
+test("نامِ مبهم عضو جعلی نمی‌سازد و گزارش ثبت نمی‌شود", async () => {
+  const two: MockRow[] = [
+    { ...MEMBER_ROW, id: ["int4", "1"], full_name: ["text", "محمد خوانی"] },
+    { ...MEMBER_ROW, id: ["int4", "2"], full_name: ["text", "محمد صادق خوانی"] },
+  ];
+  const mock = installNeonMock((call) =>
+    call.sql.toLowerCase().includes('from "members"') ? two : [],
+  );
+
+  let target;
+  try {
+    target = await resolveTarget(-100, MEMBER, "محمد امروز ساعت ۸ رفت همت");
+  } finally {
+    mock.restore();
+  }
+
+  assert.ok(target.ambiguous);
+  assert.equal(target.ambiguous.length, 2);
+  assert.equal(target.onBehalf, false);
+  assert.equal(mock.of("insert").length, 0, "هیچ عضوی ساخته نمی‌شود");
 });

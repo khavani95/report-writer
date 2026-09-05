@@ -257,3 +257,44 @@ test("پیامِ ساعت‌دار همیشه گزارش است، هرچقدر �
   assert.equal(isReportable(parseMessage("ساعت ۵ رفتم").events), true);
   assert.equal(isReportable(parseMessage("رفتم دفتر").events), true);
 });
+
+// ── متنِ پیاده‌شده‌ی ویس: عددها با حرف نوشته می‌شوند ──
+
+test("ساعتِ حرفی مثل رقمی خوانده می‌شود", () => {
+  const cases: Array<[string, string]> = [
+    ["ساعت هشت اومدم دفتر", "08:00"],
+    ["ساعت نه صبح رسیدم باغ موزه", "09:00"],
+    ["حدود ساعت ده رفتم دفتر مرکزی", "10:00"],
+    ["ساعت هشت و نیم رفتم پروژه همت", "08:30"],
+    ["ساعت دوازده و ربع رفتم ناهار", "12:15"],
+    ["ساعت هشت و ده دقیقه اومدم دفتر", "08:10"],
+  ];
+  for (const [text, expected] of cases) {
+    const ev = parseMessage(text).events[0] as { time: string };
+    assert.equal(ev.time, expected, text);
+  }
+});
+
+test("عددِ مرکبِ حرفی و «تا»ی حرفی", () => {
+  assert.deepEqual(parseMessage("ساعت بیست و یک رفتم").events, [
+    { kind: "leave", time: "21:00" },
+  ]);
+  assert.deepEqual(parseMessage("تا پنج اونجا بودم").events, [
+    { kind: "until", time: "17:00" },
+  ]);
+});
+
+test("یک روزِ کاملِ ویس‌محور درست زنجیره می‌شود", () => {
+  const segments = buildSegments([
+    "سلام من امروز ساعت هشت اومدم دفتر مرکزی",
+    "قرارداد پیمانکار رو بررسی کردم",
+    "ساعت دوازده رفتم پروژه همت و تا پنج اونجا بودم",
+  ]);
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0].startTime, "08:00");
+  assert.equal(segments[0].endTime, "12:00");
+  assert.equal(segments[0].description, "قرارداد پیمانکار رو بررسی کردم");
+  assert.equal(segments[1].place, "پروژه همت");
+  assert.equal(segments[1].startTime, "12:00");
+  assert.equal(segments[1].endTime, "17:00");
+});

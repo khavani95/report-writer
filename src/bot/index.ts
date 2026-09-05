@@ -32,11 +32,14 @@ import {
   buildDay,
   undoLast,
 } from "@/services/member-day";
-import { parseMessage, isReportable } from "@/ai/segments";
+import { parseMessage, isReportable, splitLeadingName } from "@/ai/segments";
 import { transcribeAudio } from "@/ai/voice";
 import { buildMonthlyExcel } from "@/services/board-excel";
 import { toJalali, jalaliMonthLabel } from "@/lib/jalali";
 import type { Member } from "@/db/schema";
+
+/** سقفِ حجم ویس: بالاتر از این، نه دانلود می‌شود نه در Gemini جا می‌شود */
+const MAX_VOICE_BYTES = 8 * 1024 * 1024;
 
 let _bot: Bot | null = null;
 
@@ -235,15 +238,32 @@ function registerHandlers(bot: Bot) {
 
   // ── پیام‌ها ────────────────────────────────────────
   bot.on(["message:voice", "message:audio"], async (ctx) => {
+    const media = ctx.message?.voice ?? ctx.message?.audio;
+    // ویسِ بزرگ نه از تلگرام دانلود می‌شود نه در یک درخواستِ Gemini جا می‌شود؛
+    // بهتر است زود و با پیام روشن رد شود تا وسط کار تابع کشته شود.
+    if ((media?.file_size ?? 0) > MAX_VOICE_BYTES) {
+      return await ctx.reply(MSG.voiceTooLong);
+    }
+
     const file = await ctx.getFile();
     const url = `https://api.telegram.org/file/bot${config.telegram.botToken}/${file.file_path}`;
-    const res = await fetch(url);
+    // مهلت روی دانلود هم لازم است؛ وگرنه یک اتصالِ کند کل بودجه را می‌خورد
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
     const b64 = Buffer.from(await res.arrayBuffer()).toString("base64");
-    const text = await transcribeAudio(b64);
+
+    // نام اعضا به‌عنوان راهنما، تا اسم‌های خاص درست شنیده شوند
+    const roster = ctx.chat ? await listMembers(ctx.chat.id) : [];
+    const text = await transcribeAudio(
+      b64,
+      media?.mime_type ?? "audio/ogg",
+      roster.map((m) => m.fullName),
+    );
     if (!text) return await ctx.reply(MSG.voiceFailed);
+
     await onMessage(ctx, text, {
       kind: "voice",
       telegramFileId: file.file_id,
+      transcript: text,
     });
   });
 
@@ -253,6 +273,14 @@ function registerHandlers(bot: Bot) {
       telegramMessageId: ctx.message.message_id,
     });
   });
+}
+
+interface MessageMeta {
+  kind: "text" | "voice";
+  telegramMessageId?: number;
+  telegramFileId?: string;
+  /** متنِ پیاده‌شده‌ی ویس — به عضو نشان داده می‌شود تا بدترین حالت را ببیند */
+  transcript?: string;
 }
 
 /** «محمد خوانی — مدیرعامل» → ["محمد خوانی", "مدیرعامل"] */
@@ -274,7 +302,7 @@ async function senderMember(ctx: Context): Promise<Member | null> {
 async function onMessage(
   ctx: Context,
   text: string,
-  meta: { kind: "text" | "voice"; telegramMessageId?: number; telegramFileId?: string },
+  meta: MessageMeta,
 ) {
   if (!ctx.chat || !ctx.from || ctx.from.is_bot) return;
   const chatId = ctx.chat.id;
@@ -358,10 +386,19 @@ async function ingestReport(
   ctx: Context,
   sender: Member,
   text: string,
-  meta: { kind: "text" | "voice"; telegramMessageId?: number; telegramFileId?: string },
+  meta: MessageMeta,
 ) {
   const chatId = ctx.chat!.id;
   const target = await resolveTarget(chatId, sender, text);
+
+  // نام مبهم: نه حدس می‌زنیم نه عضو تازه می‌سازیم
+  if (target.ambiguous) {
+    const { name } = splitLeadingName(text, { strict: false });
+    await ctx.reply(
+      MSG.ambiguousName(name ?? "", target.ambiguous.map((m) => m.fullName)),
+    );
+    return;
+  }
   const { day, autoClosed, reopened } = await ensureToday(target.member);
 
   // روزِ فراموش‌شده‌ی قبلی: بی‌صدا نهایی می‌شود، نه اینکه بات گیر کند
@@ -380,8 +417,10 @@ async function ingestReport(
     rawText: text,
   });
 
+  const heard = meta.transcript ? `${MSG.heard(meta.transcript)}\n` : "";
   await ctx.reply(
-    formatAck(segments, target.onBehalf ? target.member.fullName : undefined),
+    heard +
+      formatAck(segments, target.onBehalf ? target.member.fullName : undefined),
     meta.telegramMessageId
       ? { reply_parameters: { message_id: meta.telegramMessageId } }
       : undefined,

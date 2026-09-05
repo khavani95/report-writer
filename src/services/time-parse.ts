@@ -13,6 +13,98 @@ export function normalizeDigits(s: string): string {
   });
 }
 
+/**
+ * عددهای فارسی به‌حروف.
+ *
+ * ⚠️ متنِ پیاده‌شده‌ی ویس تقریباً همیشه عدد را با حرف می‌نویسد («ساعت هشت»
+ * نه «ساعت ۸»). بدون این جدول، هیچ ساعتی از هیچ پیام صوتی خوانده نمی‌شد.
+ */
+const NUMBER_WORDS: Record<string, number> = {
+  صفر: 0, یک: 1, دو: 2, سه: 3, چهار: 4, چار: 4, پنج: 5, پنچ: 5,
+  شش: 6, شیش: 6, هفت: 7, هشت: 8, نه: 9, ده: 10, یازده: 11, دوازده: 12,
+  سیزده: 13, چهارده: 14, چارده: 14, پانزده: 15, پونزده: 15,
+  شانزده: 16, شونزده: 16, هفده: 17, هیفده: 17, هجده: 18, هیجده: 18,
+  نوزده: 19, بیست: 20, سی: 30, چهل: 40, پنجاه: 50,
+};
+
+/** واژه‌هایی که می‌توانند نیمه‌ی دومِ عددِ مرکب باشند: «بیست و یک» */
+const TENS = new Set(["بیست", "سی", "چهل", "پنجاه"]);
+
+/** کسرهای رایج ساعت */
+const FRACTIONS: Record<string, number> = { نیم: 30, ربع: 15 };
+
+/**
+ * حذف نویسه‌های زینتی برای مقایسه‌ی واژه‌ی عددی.
+ * ⚠️ «:» حذف نمی‌شود، وگرنه «۹:۳۰» به «۹۳۰» تبدیل و از الگوی ساعت رد می‌شود.
+ */
+function plainWord(t: string): string {
+  return t
+    .replace(/[ىيﻱﻲ]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/[‌‍‎‏]/g, "")
+    .replace(/[.,،؛;!؟?"'«»()]/g, "")
+    .replace(/^:+|:+$/g, "")
+    .trim();
+}
+
+/** آیا این واژه می‌تواند شروع یک عدد باشد (رقمی یا حرفی)؟ */
+export function isNumberWord(token?: string): boolean {
+  if (!token) return false;
+  const t = plainWord(normalizeDigits(token));
+  return /^\d{1,2}(:\d{2})?$/.test(t) || t in NUMBER_WORDS;
+}
+
+/** آیا این واژه کسرِ ساعت است؟ («نیم»، «ربع») */
+export function isFractionWord(token?: string): boolean {
+  if (!token) return false;
+  return plainWord(token) in FRACTIONS;
+}
+
+export interface NumberRead {
+  /** مقدار به‌صورت رشته‌ی رقمی، مثل «8» یا «9:30» */
+  text: string;
+  /** چند واژه مصرف شد */
+  consumed: number;
+}
+
+/**
+ * یک عدد را از `tokens[i]` می‌خواند — چه رقمی باشد چه حرفی، چه مرکب
+ * («بیست و یک»). خروجی رشته‌ی رقمی است تا بقیه‌ی مسیر دست‌نخورده بماند.
+ */
+export function readNumber(tokens: string[], i: number): NumberRead | null {
+  const first = plainWord(normalizeDigits(tokens[i] ?? ""));
+  if (/^\d{1,2}(:\d{2})?$/.test(first)) return { text: first, consumed: 1 };
+
+  const base = NUMBER_WORDS[first];
+  if (base === undefined) return null;
+
+  // «بیست و یک» → ۲۱
+  if (TENS.has(first) && plainWord(tokens[i + 1] ?? "") === "و") {
+    const second = NUMBER_WORDS[plainWord(tokens[i + 2] ?? "")];
+    if (second !== undefined && second < 10) {
+      return { text: String(base + second), consumed: 3 };
+    }
+  }
+  return { text: String(base), consumed: 1 };
+}
+
+/** «و نیم» → ۳۰ دقیقه، «و ربع» → ۱۵ دقیقه، «و ده دقیقه» → ۱۰ دقیقه */
+export function readMinutes(tokens: string[], i: number): NumberRead | null {
+  if (plainWord(tokens[i] ?? "") !== "و") return null;
+
+  const frac = FRACTIONS[plainWord(tokens[i + 1] ?? "")];
+  if (frac !== undefined) return { text: String(frac), consumed: 2 };
+
+  const num = readNumber(tokens, i + 1);
+  if (num && /^\d{1,2}$/.test(num.text)) {
+    const after = plainWord(tokens[i + 1 + num.consumed] ?? "");
+    if (after === "دقیقه") {
+      return { text: num.text, consumed: 1 + num.consumed + 1 };
+    }
+  }
+  return null;
+}
+
 const AM_WORDS = /صبح|بامداد/;
 const PM_WORDS = /عصر|بعد ?از ?ظهر|بعدازظهر|غروب|شب|بعد ?ظهر/;
 const NOON_WORDS = /ظهر/;

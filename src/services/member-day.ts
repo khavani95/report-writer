@@ -2,6 +2,7 @@ import {
   getMemberByUser,
   listMembers,
   matchMemberByName,
+  matchMembersByName,
   createMember,
   updateMember,
   findUnlinkedMemberByName,
@@ -40,6 +41,10 @@ export interface Target {
   /** گزارش برای عضو دیگری ثبت شد (نه فرستنده) */
   onBehalf: boolean;
   /**
+   * نام مبهم بود و به چند عضو می‌خورد؛ گزارش ثبت نشده و باید پرسید.
+   */
+  ambiguous: Member[] | null;
+  /**
    * متنی که باید تحلیل شود.
    * وقتی گزارش برای دیگری است، نامِ ابتدای پیام از آن جدا شده؛ وگرنه همان
    * متنِ کامل است — تا جمله‌ای مثل «جلسه هیئت‌مدیره برگزار شد» دو واژه‌ی
@@ -58,7 +63,12 @@ export async function resolveTarget(
   sender: Member,
   text: string,
 ): Promise<Target> {
-  const mine: Target = { member: sender, onBehalf: false, text };
+  const mine: Target = {
+    member: sender,
+    onBehalf: false,
+    ambiguous: null,
+    text,
+  };
 
   // مقایسه با فهرست اعضا با قاعده‌ی سست انجام می‌شود؛ تطبیق با یک عضوِ
   // واقعی خودش ضامنِ درستی است.
@@ -66,11 +76,18 @@ export async function resolveTarget(
   if (!loose.name) return mine;
 
   const roster = await listMembers(chatId);
-  const matched = matchMemberByName(roster, loose.name);
+  const matches = matchMembersByName(roster, loose.name);
+
+  // «محمد» به دو عضو می‌خورد: نه حدس بزن، نه عضو سوم بساز — بپرس
+  if (matches.length > 1 && !matches.some((m) => m.id === sender.id)) {
+    return { ...mine, ambiguous: matches };
+  }
+
+  const matched = matches.length === 1 ? matches[0] : null;
   if (matched) {
     // نامِ خودِ فرستنده در ابتدای پیام یعنی همان فرستنده
     if (matched.id === sender.id) return { ...mine, text: loose.rest };
-    return { member: matched, onBehalf: true, text: loose.rest };
+    return { member: matched, onBehalf: true, ambiguous: null, text: loose.rest };
   }
 
   // عضوِ ناشناس فقط با نشانه‌ی روشن ساخته می‌شود: فعلِ حرکتیِ سوم‌شخص.
@@ -79,7 +96,12 @@ export async function resolveTarget(
   if (!strict.name) return mine;
 
   const created = await resolveMemberByName(chatId, strict.name, roster);
-  return { member: created, onBehalf: true, text: strict.rest };
+  return {
+    member: created,
+    onBehalf: true,
+    ambiguous: null,
+    text: strict.rest,
+  };
 }
 
 /**
