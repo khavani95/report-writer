@@ -18,7 +18,7 @@ import {
   deleteLastRawMessage,
   saveRawMessage,
 } from "@/db/queries";
-import { toJalali, type JalaliInfo } from "@/lib/jalali";
+import { toJalali, tehranTime, type JalaliInfo } from "@/lib/jalali";
 import {
   applyEvents,
   buildSegments,
@@ -78,12 +78,20 @@ export async function resolveTarget(
   const roster = await listMembers(chatId);
   const matches = matchMembersByName(roster, loose.name);
 
+  /**
+   * ابهامِ ناشی از ردیفِ تکراری واقعی نیست: «شایان» (فقط نام، از گزارشِ
+   * دیگری ساخته شده) و «Shayan Momen» (متصل به کاربر) یک نفرند. اگر میان
+   * تطبیق‌ها فقط یکی به کاربر تلگرام متصل باشد، همان مرجع است.
+   */
+  const linked = matches.filter((m) => m.userId !== null);
+  const resolved = linked.length === 1 ? [linked[0]] : matches;
+
   // «محمد» به دو عضو می‌خورد: نه حدس بزن، نه عضو سوم بساز — بپرس
-  if (matches.length > 1 && !matches.some((m) => m.id === sender.id)) {
-    return { ...mine, ambiguous: matches };
+  if (resolved.length > 1 && !resolved.some((m) => m.id === sender.id)) {
+    return { ...mine, ambiguous: resolved };
   }
 
-  const matched = matches.length === 1 ? matches[0] : null;
+  const matched = resolved.length === 1 ? resolved[0] : null;
   if (matched) {
     // نامِ خودِ فرستنده در ابتدای پیام یعنی همان فرستنده
     if (matched.id === sender.id) return { ...mine, text: loose.rest };
@@ -199,7 +207,7 @@ export async function ingestMessage(
   },
 ): Promise<Segment[]> {
   // پیامِ غیرگزارشی («سلام») نه ذخیره می‌شود نه به زنجیره می‌چسبد
-  const { events } = parseMessage(text);
+  const { events } = parseMessage(text, { now: tehranTime() });
   if (!isReportable(events)) return [];
 
   const raw = meta.rawText ?? text;

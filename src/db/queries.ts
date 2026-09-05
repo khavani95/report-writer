@@ -11,9 +11,9 @@ import {
   type MemberDay,
   type ConversationState,
 } from "./schema";
-import type { JalaliInfo } from "@/lib/jalali";
+import { tehranTime, type JalaliInfo } from "@/lib/jalali";
 import { findWorkerMatch, namesMatch } from "@/lib/text-normalize";
-import type { Segment } from "@/ai/segments";
+import type { DayMessage, Segment } from "@/ai/segments";
 
 // ── اعضا ──────────────────────────────────────────────────
 
@@ -300,17 +300,28 @@ export async function saveRawMessage(data: {
   });
 }
 
-/** همه‌ی پیام‌های یک روز، به ترتیب */
-export async function getDayMessages(dayId: number): Promise<string[]> {
+/**
+ * همه‌ی پیام‌های یک روز، به ترتیب — همراه با ساعتِ ثبتشان.
+ * ساعت لازم است چون «الان تعطیل کردیم» ساعتی نمی‌گوید و باید از زمانِ خودِ
+ * پیام خوانده شود؛ وگرنه در بازسازیِ روز آن رویداد بی‌اثر می‌ماند.
+ */
+export async function getDayMessages(dayId: number): Promise<DayMessage[]> {
   const db = getDb();
   const rows = await db
-    .select({ text: rawMessages.text, transcript: rawMessages.transcript })
+    .select({
+      text: rawMessages.text,
+      transcript: rawMessages.transcript,
+      createdAt: rawMessages.createdAt,
+    })
     .from(rawMessages)
     .where(eq(rawMessages.memberDayId, dayId))
     .orderBy(asc(rawMessages.id));
   return rows
-    .map((r) => (r.text ?? r.transcript ?? "").trim())
-    .filter(Boolean);
+    .map((r) => ({
+      text: (r.text ?? r.transcript ?? "").trim(),
+      at: r.createdAt ? tehranTime(r.createdAt) : null,
+    }))
+    .filter((m) => m.text);
 }
 
 /**

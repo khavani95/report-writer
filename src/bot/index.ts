@@ -224,8 +224,13 @@ function registerHandlers(bot: Bot) {
       if (!day) return;
       const member = await getMemberById(day.memberId);
       if (!member) return;
+      const chatId = ctx.chat!.id;
+      if (await isBusy(chatId, presser)) return await ctx.reply(MSG.busy);
+      await setPhase(chatId, presser, "busy");
+
       await ctx.reply(MSG.processing);
       const res = await buildDay(day, { close: kind === "close" });
+      await clearState(chatId, presser);
       if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
       else if (res.aiIncomplete) await ctx.reply(MSG.aiIncomplete);
       await ctx.reply(formatDayReport(member, day, res.segments, res), {
@@ -403,7 +408,12 @@ async function ingestReport(
 
   // روزِ فراموش‌شده‌ی قبلی: بی‌صدا نهایی می‌شود، نه اینکه بات گیر کند
   if (autoClosed.length) {
-    await ctx.reply(MSG.autoClosed(autoClosed.map((d) => d.dateLabel)));
+    await ctx.reply(
+      MSG.autoClosed(
+        autoClosed.map((d) => d.dateLabel),
+        target.onBehalf ? target.member.fullName : undefined,
+      ),
+    );
   }
   if (reopened) await ctx.reply(MSG.dayReopened(day.dateLabel));
 
@@ -427,6 +437,19 @@ async function ingestReport(
   );
 }
 
+/**
+ * آیا همین حالا کارِ سنگینی برای این کاربر در جریان است؟
+ * نشانه پس از دو دقیقه کهنه تلقی می‌شود تا اگر تابع وسط کار کشته شد،
+ * کاربر برای همیشه پشت این محافظ گیر نکند.
+ */
+const BUSY_TTL_MS = 2 * 60 * 1000;
+
+async function isBusy(chatId: number, userId: number): Promise<boolean> {
+  const st = await getState(chatId, userId);
+  if (st?.phase !== "busy") return false;
+  return Date.now() - st.updatedAt.getTime() < BUSY_TTL_MS;
+}
+
 /** گزارش امروزِ فرستنده (با تحلیل کامل روز) */
 async function sendDayReport(ctx: Context, opts: { close: boolean }) {
   const member = await senderMember(ctx);
@@ -436,8 +459,15 @@ async function sendDayReport(ctx: Context, opts: { close: boolean }) {
   const day = await getDayByDate(member.id, today.key);
   if (!day) return await ctx.reply(MSG.noOpenDay);
 
+  // فشردنِ دوباره‌ی /close نباید دو تحلیلِ موازی و دو گزارش بسازد
+  const chatId = ctx.chat!.id;
+  const userId = ctx.from!.id;
+  if (await isBusy(chatId, userId)) return await ctx.reply(MSG.busy);
+  await setPhase(chatId, userId, "busy");
+
   await ctx.reply(MSG.processing);
   const res = await buildDay(day, { close: opts.close });
+  await clearState(chatId, userId);
   if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
   else if (res.aiIncomplete) await ctx.reply(MSG.aiIncomplete);
 

@@ -1,6 +1,6 @@
 import { Type } from "@google/genai";
 import { generateWithRetry } from "./gemini";
-import { buildSegments, type Segment } from "./segments";
+import { buildSegments, type DayMessage, type Segment } from "./segments";
 import { timeToMinutes } from "@/services/time-parse";
 import { normalizeName } from "@/lib/text-normalize";
 
@@ -77,9 +77,11 @@ function safeTime(v: unknown): string | null {
  * زنجیره‌ی روزِ یک عضو را از روی پیام‌هایش می‌سازد.
  * همیشه پارسر قطعی اجرا می‌شود؛ هوش مصنوعی فقط رویش سوار می‌شود.
  */
-export async function planDay(messages: string[]): Promise<DayPlan> {
+export async function planDay(messages: DayMessage[]): Promise<DayPlan> {
   const deterministic = buildSegments(messages);
-  const conversation = messages.map((m) => m.trim()).filter(Boolean);
+  const conversation = messages
+    .map((m) => (typeof m === "string" ? m : m.text).trim())
+    .filter(Boolean);
   if (!conversation.length) {
     return { segments: [], aiFailed: false, aiIncomplete: false };
   }

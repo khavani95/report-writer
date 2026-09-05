@@ -79,9 +79,14 @@ export const MSG = {
   dayReopened: (label: string) =>
     `🔓 روز «${label}» بسته شده بود؛ با این گزارش دوباره باز شد.\n` +
     "در پایان دوباره /close را بزنید.",
-  autoClosed: (labels: string[]) =>
-    `ℹ️ روز${labels.length > 1 ? "های" : ""} ${labels.join("، ")} هنوز باز بود؛ ` +
-    "نهایی‌اش کردم و روز تازه را باز کردم.",
+  autoClosed: (labels: string[], who?: string) =>
+    `ℹ️ روز${labels.length > 1 ? "های" : ""} ${labels.join("، ")}` +
+    (who ? ` برای «${who}»` : "") +
+    " هنوز باز بود؛ نهایی‌اش کردم و روز تازه را باز کردم.",
+
+  busy:
+    "⏳ همین حالا دارم روز شما را جمع‌بندی می‌کنم — چند لحظه صبر کنید.\n" +
+    "دوباره زدن فقط کار را کندتر می‌کند.",
 
   onBehalf: (name: string) => `📝 به نام «${name}» ثبت شد.`,
 
