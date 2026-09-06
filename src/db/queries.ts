@@ -11,9 +11,9 @@ import {
   type MemberDay,
   type ConversationState,
 } from "./schema";
-import type { JalaliInfo } from "@/lib/jalali";
+import { tehranTime, type JalaliInfo } from "@/lib/jalali";
 import { findWorkerMatch, namesMatch } from "@/lib/text-normalize";
-import type { Segment } from "@/ai/segments";
+import type { DayMessage, Segment } from "@/ai/segments";
 
 // ── اعضا ──────────────────────────────────────────────────
 
@@ -300,17 +300,28 @@ export async function saveRawMessage(data: {
   });
 }
 
-/** همه‌ی پیام‌های یک روز، به ترتیب */
-export async function getDayMessages(dayId: number): Promise<string[]> {
+/**
+ * همه‌ی پیام‌های یک روز، به ترتیب — همراه با ساعتِ ثبتشان.
+ * ساعت لازم است چون «الان تعطیل کردیم» ساعتی نمی‌گوید و باید از زمانِ خودِ
+ * پیام خوانده شود؛ وگرنه در بازسازیِ روز آن رویداد بی‌اثر می‌ماند.
+ */
+export async function getDayMessages(dayId: number): Promise<DayMessage[]> {
   const db = getDb();
   const rows = await db
-    .select({ text: rawMessages.text, transcript: rawMessages.transcript })
+    .select({
+      text: rawMessages.text,
+      transcript: rawMessages.transcript,
+      createdAt: rawMessages.createdAt,
+    })
     .from(rawMessages)
     .where(eq(rawMessages.memberDayId, dayId))
     .orderBy(asc(rawMessages.id));
   return rows
-    .map((r) => (r.text ?? r.transcript ?? "").trim())
-    .filter(Boolean);
+    .map((r) => ({
+      text: (r.text ?? r.transcript ?? "").trim(),
+      at: r.createdAt ? tehranTime(r.createdAt) : null,
+    }))
+    .filter((m) => m.text);
 }
 
 /**
@@ -373,6 +384,86 @@ export async function replaceSegments(
       endTime: s.endTime,
     })),
   );
+}
+
+// ── کارهای زمان‌بندی‌شده ───────────────────────────────────
+
+/** همه‌ی چت‌هایی که دست‌کم یک عضو دارند */
+export async function listChatIds(): Promise<number[]> {
+  const db = getDb();
+  const rows = await db
+    .selectDistinct({ chatId: members.chatId })
+    .from(members)
+    .where(eq(members.isActive, true));
+  return rows.map((r) => r.chatId);
+}
+
+export interface OpenDayRow {
+  dayId: number;
+  memberName: string;
+  jalaliDate: string;
+  dateLabel: string;
+}
+
+/** روزهای بازِ یک چت در یک تاریخ، همراه با نام عضو */
+export async function openDaysOfChat(
+  chatId: number,
+  jalaliDate: string,
+): Promise<OpenDayRow[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      dayId: memberDays.id,
+      memberName: members.fullName,
+      jalaliDate: memberDays.jalaliDate,
+      dateLabel: memberDays.dateLabel,
+    })
+    .from(memberDays)
+    .innerJoin(members, eq(memberDays.memberId, members.id))
+    .where(
+      and(
+        eq(members.chatId, chatId),
+        eq(memberDays.status, "open"),
+        eq(memberDays.jalaliDate, jalaliDate),
+      ),
+    )
+    .orderBy(members.fullName);
+  return rows;
+}
+
+/** بستنِ دسته‌ایِ چند روز با یک دستور */
+export async function closeDays(dayIds: number[]): Promise<void> {
+  if (!dayIds.length) return;
+  const db = getDb();
+  await db
+    .update(memberDays)
+    .set({ status: "closed", closedAt: new Date() })
+    .where(inArray(memberDays.id, dayIds));
+}
+
+/** قطعه‌های چند روز، یک‌جا */
+export async function segmentsOfDays(
+  dayIds: number[],
+): Promise<Map<number, Segment[]>> {
+  const out = new Map<number, Segment[]>();
+  if (!dayIds.length) return out;
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(activitySegments)
+    .where(inArray(activitySegments.memberDayId, dayIds))
+    .orderBy(asc(activitySegments.seq), asc(activitySegments.id));
+  for (const r of rows) {
+    const list = out.get(r.memberDayId) ?? [];
+    list.push({
+      place: r.place,
+      description: r.description,
+      startTime: r.startTime,
+      endTime: r.endTime,
+    });
+    out.set(r.memberDayId, list);
+  }
+  return out;
 }
 
 // ── داده‌ی ماهانه (برای اکسل) ─────────────────────────────

@@ -224,8 +224,13 @@ function registerHandlers(bot: Bot) {
       if (!day) return;
       const member = await getMemberById(day.memberId);
       if (!member) return;
+      const chatId = ctx.chat!.id;
+      if (await isBusy(chatId, presser)) return await ctx.reply(MSG.busy);
+      await setPhase(chatId, presser, "busy");
+
       await ctx.reply(MSG.processing);
       const res = await buildDay(day, { close: kind === "close" });
+      await clearState(chatId, presser);
       if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
       else if (res.aiIncomplete) await ctx.reply(MSG.aiIncomplete);
       await ctx.reply(formatDayReport(member, day, res.segments, res), {
@@ -403,7 +408,12 @@ async function ingestReport(
 
   // روزِ فراموش‌شده‌ی قبلی: بی‌صدا نهایی می‌شود، نه اینکه بات گیر کند
   if (autoClosed.length) {
-    await ctx.reply(MSG.autoClosed(autoClosed.map((d) => d.dateLabel)));
+    await ctx.reply(
+      MSG.autoClosed(
+        autoClosed.map((d) => d.dateLabel),
+        target.onBehalf ? target.member.fullName : undefined,
+      ),
+    );
   }
   if (reopened) await ctx.reply(MSG.dayReopened(day.dateLabel));
 
@@ -417,14 +427,56 @@ async function ingestReport(
     rawText: text,
   });
 
-  const heard = meta.transcript ? `${MSG.heard(meta.transcript)}\n` : "";
-  await ctx.reply(
-    heard +
-      formatAck(segments, target.onBehalf ? target.member.fullName : undefined),
-    meta.telegramMessageId
-      ? { reply_parameters: { message_id: meta.telegramMessageId } }
-      : undefined,
-  );
+  /**
+   * ⚠️ تأییدیه عمداً «واکنش» است نه پیام.
+   *
+   * در گروهِ واقعی هر پیامِ گزارش یک پاسخِ بات می‌گرفت و چت غیرقابل‌خواندن
+   * می‌شد. واکنش نه پیام تازه‌ای می‌سازد نه اعلان می‌فرستد، ولی فرستنده
+   * می‌بیند که ثبت شده. پیام فقط جایی می‌ماند که واقعاً حرفی برای گفتن
+   * هست: گزارش به نام دیگری، یا متنِ شنیده‌شده‌ی ویس که باید بازبینی شود.
+   */
+  const notes: string[] = [];
+  if (meta.transcript) notes.push(MSG.heard(meta.transcript));
+  if (target.onBehalf) {
+    notes.push(
+      formatAck(segments, target.member.fullName),
+    );
+  }
+
+  if (notes.length) {
+    await ctx.reply(
+      notes.join("\n"),
+      meta.telegramMessageId
+        ? { reply_parameters: { message_id: meta.telegramMessageId } }
+        : undefined,
+    );
+    return;
+  }
+
+  // واکنش ممکن است در بعضی گروه‌ها اجازه نداشته باشد؛ آن‌وقت به پیام
+  // برمی‌گردیم تا تأییدی که کاربر لازم دارد از دست نرود.
+  try {
+    await ctx.react("👌");
+  } catch {
+    await ctx.reply(formatAck(segments), {
+      reply_parameters: meta.telegramMessageId
+        ? { message_id: meta.telegramMessageId }
+        : undefined,
+    });
+  }
+}
+
+/**
+ * آیا همین حالا کارِ سنگینی برای این کاربر در جریان است؟
+ * نشانه پس از دو دقیقه کهنه تلقی می‌شود تا اگر تابع وسط کار کشته شد،
+ * کاربر برای همیشه پشت این محافظ گیر نکند.
+ */
+const BUSY_TTL_MS = 2 * 60 * 1000;
+
+async function isBusy(chatId: number, userId: number): Promise<boolean> {
+  const st = await getState(chatId, userId);
+  if (st?.phase !== "busy") return false;
+  return Date.now() - st.updatedAt.getTime() < BUSY_TTL_MS;
 }
 
 /** گزارش امروزِ فرستنده (با تحلیل کامل روز) */
@@ -436,8 +488,15 @@ async function sendDayReport(ctx: Context, opts: { close: boolean }) {
   const day = await getDayByDate(member.id, today.key);
   if (!day) return await ctx.reply(MSG.noOpenDay);
 
+  // فشردنِ دوباره‌ی /close نباید دو تحلیلِ موازی و دو گزارش بسازد
+  const chatId = ctx.chat!.id;
+  const userId = ctx.from!.id;
+  if (await isBusy(chatId, userId)) return await ctx.reply(MSG.busy);
+  await setPhase(chatId, userId, "busy");
+
   await ctx.reply(MSG.processing);
   const res = await buildDay(day, { close: opts.close });
+  await clearState(chatId, userId);
   if (res.aiFailed) await ctx.reply(MSG.aiUnavailable);
   else if (res.aiIncomplete) await ctx.reply(MSG.aiIncomplete);
 

@@ -51,6 +51,16 @@ export function nowInTehran(): Date {
   );
 }
 
+/** ساعتِ تهرانِ یک تاریخ به‌صورت HH:MM */
+export function tehranTime(date: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Tehran",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 export interface JalaliInfo {
   /** رشته‌ی تاریخ شمسی به شکل YYYY/MM/DD برای کلید یکتا */
   key: string;

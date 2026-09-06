@@ -82,6 +82,27 @@ const VERB_SUFFIXES = ["", "م", "ی", "یم", "ید", "ن", "ند", "ه", "ه�
 /** واژه‌هایی که ابتدای مقصد می‌آیند و بخشی از نام محل نیستند */
 const PLACE_PREFIXES = ["به", "در", "سمت", "طرف", "سراغ", "سوی", "تو", "توی"];
 
+/**
+ * واژه‌هایی که مقصد را تمام می‌کنند.
+ * «رفتم ساختمان برای فلاشینگ بام» → محل «ساختمان» است نه «ساختمان برای فلاشینگ».
+ * روزهای هفته هم اینجا هستند چون «رفتیم پنجشنبه یه سری وسیله آوردیم»
+ * محلش «پنجشنبه یه» نیست.
+ */
+const PLACE_STOP = [
+  "برای", "جهت", "بابت", "درباره", "بخاطر", "بهخاطر", "همراه", "با",
+  "شنبه", "یکشنبه", "دوشنبه", "سهشنبه", "چهارشنبه", "پنجشنبه", "جمعه",
+  "روز", "یه", "یک", "یکی", "چند", "سری", "تا", "ساعت", "که", "ولی", "اما",
+];
+
+/** نشانه‌های «شروعِ کار» بدون فعل حرکتی: «۹ صبح شروع کردم» */
+const START_WORDS = ["شروع", "آغاز", "اغاز", "استارت"];
+
+/** نشانه‌های «پایانِ کار» بدون فعل حرکتی: «ترک کار ساعت ۱۹:۳۰» */
+const END_WORDS = ["ترک", "تعطیل", "تمام", "تموم", "پایان", "خاتمه", "اتمام"];
+
+/** «الان تعطیل کردیم» — ساعتِ گفته‌نشده یعنی همین حالا */
+const NOW_WORDS = ["الان", "الآن", "هماکنون", "همینالان", "تازه"];
+
 /** قیدهای زمانی که در ابتدای جمله می‌آیند و معنایی برای ما ندارند */
 const TIME_ADVERBS = ["امروز", "دیروز", "فردا", "صبح", "امشب", "دیشب"];
 
@@ -220,7 +241,9 @@ function restIsClause(tokens: string[], from: number): boolean {
   for (let i = from; i < tokens.length; i++) {
     const t = normalizeToken(tokens[i]);
     if (t === "و" || t === "سپس" || t === "بعدش") break;
-    if (t === "ساعت" || isVerbToken(tokens[i])) return true;
+    // فعل لازم است، نه صرفاً «ساعت». وگرنه «من و شایان ساعت ۱۹:۳۰» از وسط
+    // نصف می‌شود و «من» فاعلِ بی‌جمله می‌ماند.
+    if (isVerbToken(tokens[i])) return true;
   }
   return false;
 }
@@ -282,15 +305,39 @@ function findTime(tokens: string[]): TimeHit | null {
       until,
     };
   }
+
+  // بدون واژه‌ی «ساعت»: عددی که بلافاصله «صبح/عصر/شب» دنبالش بیاید
+  // («۹ صبح شروع کردم»). بدون این شرط، «۳ متر» هم زمان خوانده می‌شد.
+  for (let i = 0; i < tokens.length; i++) {
+    const num = readNumber(tokens, i);
+    if (!num) continue;
+    const next = normalizeToken(tokens[i + num.consumed] ?? "");
+    if (!/^(صبح|عصر|ظهر|شب|بامداد|غروب|بعدازظهر)$/.test(next)) continue;
+    return {
+      expr: `${num.text} ${tokens[i + num.consumed]}`,
+      start: i,
+      end: i + num.consumed + 1,
+      until: false,
+    };
+  }
   return null;
 }
 
 /** مقصد را از واژه‌های بعد از فعل بیرون می‌کشد (خالی یعنی «ترک کردن») */
 function extractPlace(tokens: string[], from: number): string | null {
   let i = from;
-  // حذف حرف اضافه‌ی ابتدای مقصد: «رفتم به دفتر»
-  while (i < tokens.length && PLACE_PREFIXES.includes(normalizeToken(tokens[i]))) {
-    i += 1;
+  // حذف حرف اضافه و قیدهای ابتدای مقصد: «رفتم به دفتر»، «هم بانک مرکزی»
+  while (i < tokens.length) {
+    const n = normalizeToken(tokens[i]);
+    if (
+      PLACE_PREFIXES.includes(n) ||
+      NOTE_PREFIXES.includes(n) ||
+      TIME_ADVERBS.includes(n)
+    ) {
+      i += 1;
+      continue;
+    }
+    break;
   }
   // اگر بعد از مقصد فعلی هست، یعنی شرحِ کار هم چسبیده؛ مقصد را کوتاه‌تر می‌گیریم
   const tailHasVerb = tokens.slice(i).some((t) => isVerbToken(t));
@@ -301,7 +348,7 @@ function extractPlace(tokens: string[], from: number): string | null {
     const n = normalizeToken(tokens[k]);
     if (!n) continue;
     if (isVerbToken(tokens[k])) break;
-    if (n === "تا" || n === "ساعت" || n === "که" || n === "ولی" || n === "اما") break;
+    if (PLACE_STOP.includes(n)) break;
     if (NOTE_PREFIXES.includes(n)) break;
     if (/^\d/.test(n)) break;
     words.push(tokens[k]);
@@ -362,6 +409,33 @@ function classifyClause(clause: string): SegmentEvent[] {
     return events;
   }
 
+  /**
+   * بندی که ساعت دارد ولی فعل حرکتی ندارد.
+   * پیش از این، ساعتش کاملاً دور ریخته می‌شد و فقط شرح می‌ماند:
+   * «ساعت ۹ بانک مرکزی بود» ، «۹ صبح شروع کردم» ، «ترک کار ساعت ۱۹:۳۰».
+   */
+  if (time && !verbKind) {
+    const has = (words: string[]) =>
+      rest.some((t) => words.some((w) => normalizeToken(t).startsWith(w)));
+
+    if (has(END_WORDS)) {
+      const t = parseSingleTime(time.expr, "exit");
+      return t ? [{ kind: "leave", time: t }] : [];
+    }
+    const t = parseSingleTime(time.expr, "entry");
+    if (has(START_WORDS)) {
+      return t ? [{ kind: "arrive", time: t, place: null }] : [];
+    }
+    const place = extractPlace(rest, 0);
+    if (place && t) {
+      const events: SegmentEvent[] = [{ kind: "arrive", time: t, place }];
+      const tail = cleanNote(rest.slice(rest.indexOf(place.split(" ")[0]) + place.split(" ").length));
+      if (isMeaningful(tail)) events.push({ kind: "note", text: tail });
+      return events;
+    }
+    // فقط ساعت، بدون هیچ نشانه‌ی دیگر: حدس نمی‌زنیم
+  }
+
   if (verbKind) {
     const place = verbKind === "leave" ? null : extractPlace(rest, verbIdx + 1);
     const arriving = verbKind === "arrive" || (verbKind === "move" && !!place);
@@ -378,10 +452,9 @@ function classifyClause(clause: string): SegmentEvent[] {
     // اگر بعد از مقصد هنوز جمله‌ای مانده، شرحِ کار است
     const placeWords = place ? place.split(/\s+/).length : 0;
     const tail = rest.slice(verbIdx + 1 + placeWords);
+    // «رفتم ساختمان برای فلاشینگ بام» → شرح «برای فلاشینگ بام» نباید گم شود
     const note = cleanNote(tail);
-    if (isMeaningful(note) && tail.some((t2) => isVerbToken(t2))) {
-      events.push({ kind: "note", text: note });
-    }
+    if (isMeaningful(note)) events.push({ kind: "note", text: note });
     return events;
   }
 
@@ -425,7 +498,8 @@ export function splitLeadingName(
     if (TIME_ADVERBS.includes(n) || n === "ساعت" || /^\d/.test(n)) break;
     if (isVerbToken(tok) || isMoveVerb(tok) || isArriveVerb(tok)) break;
     if (PLACE_PREFIXES.includes(n) || NOTE_PREFIXES.includes(n)) break;
-    if (!/^[؀-ۿ]{2,}$/.test(n)) break;
+    // نامِ لاتین هم نام است: «Shayan امروز ساعت ۹ اومد»
+    if (!/^[؀-ۿa-zA-Z]{2,}$/.test(n)) break;
     name.push(tok);
     consumed += 1;
   }
@@ -440,13 +514,29 @@ export function splitLeadingName(
 }
 
 /** تحلیل کاملِ یک پیام: نامِ صاحبِ گزارش + رویدادهای زنجیره */
-export function parseMessage(text: string): ParsedMessage {
+export function parseMessage(
+  text: string,
+  opts?: { now?: string | null },
+): ParsedMessage {
   const { name, rest } = splitLeadingName(text);
   const events: SegmentEvent[] = [];
   for (const clause of splitClauses(rest)) {
     events.push(...classifyClause(clause));
   }
-  return { personName: name, events: mergeNotes(events) };
+  const merged = mergeNotes(events);
+
+  /**
+   * «من و شایان الان تعطیل کردیم» ساعتی نمی‌گوید ولی دقیقاً یعنی همین حالا.
+   * بدون این، رویداد بی‌ساعت می‌ماند و در زنجیره اثری نمی‌گذارد.
+   */
+  if (opts?.now && NOW_WORDS.some((w) => rest.includes(w))) {
+    for (const ev of merged) {
+      if ((ev.kind === "leave" || ev.kind === "arrive") && !ev.time) {
+        ev.time = opts.now;
+      }
+    }
+  }
+  return { personName: name, events: merged };
 }
 
 /** شرح‌های پشت‌سرهم یک جمله بودند؛ دوباره با «و» به هم وصل می‌شوند */
@@ -504,33 +594,59 @@ export function applyEvents(
     const last = out[out.length - 1] as Segment | undefined;
 
     if (ev.kind === "arrive") {
-      /**
-       * «رسیدنِ» دوباره به همان محل، وقتی هنوز کاری برایش ثبت نشده، یعنی
-       * عضو دارد ساعت خودش را تصحیح می‌کند — نه اینکه دوباره جایی رفته.
-       * در گروه واقعی دیده شد: «ساعت ۹:۳۰ اومدم همت» و بعد «ساعت ۹ اومدم
-       * همت»؛ بدون این قاعده سه قطعه‌ی «همت» ساخته می‌شد که دوتاش خالی بود
-       * و در جدول ماهانه هم دیده می‌شد.
-       */
+      // قطعه‌ی «باز» یعنی هنوز بسته نشده و می‌تواند کامل شود
+      const open = last && !last.endTime ? last : undefined;
       const sameSpot = Boolean(
-        last && !last.description && !last.endTime && samePlace(last.place, ev.place),
+        open && !open.description && samePlace(open.place, ev.place),
       );
       // برای تصحیح، ساعتِ خودِ همین قطعه مبنای «رو به جلو» نیست؛ وگرنه
       // اصلاحِ ۹:۳۰ به ۹:۰۰ به ۲۱:۰۰ تفسیر می‌شد.
       const baseline = lastKnownTime(sameSpot ? out.slice(0, -1) : out);
       const time = ev.time ? forwardInDay(ev.time, baseline) : null;
 
-      if (sameSpot && last) {
-        if (time) last.startTime = time;
-        if (ev.place && !last.place) last.place = ev.place;
+      // «اومدم» بدون محل و بدون ساعت هیچ اطلاعاتی ندارد
+      if (!ev.place && !time) continue;
+
+      if (!last) {
+        out.push({
+          place: ev.place,
+          description: "",
+          startTime: time,
+          endTime: null,
+        });
         continue;
       }
-      // قطعه‌ی «فقط شرح» (بدون محل و ساعت) هنوز جا دارد؛ همان را کامل می‌کنیم
-      if (last && !last.place && !last.startTime && !last.endTime) {
-        last.place = ev.place;
-        last.startTime = time;
+
+      /**
+       * «رسیدنِ» دوباره به همان محل، وقتی هنوز کاری برایش ثبت نشده، یعنی
+       * عضو دارد ساعت خودش را تصحیح می‌کند — نه اینکه دوباره جایی رفته.
+       */
+      if (sameSpot && open) {
+        if (time) open.startTime = time;
         continue;
       }
-      if (last && !last.endTime && time) last.endTime = time;
+
+      /**
+       * قطعه‌ی بازِ بی‌محل را همین رویداد کامل می‌کند.
+       * «ساعت ۱۰ اومدم» و بعد «رفتم همت» یک قطعه‌اند، نه دو تا — و قطعه‌ی
+       * اولِ بی‌محل نباید به‌صورت سطرِ خالی در گزارش بماند.
+       */
+      if (open && !open.place && (!time || !open.startTime)) {
+        if (ev.place) open.place = ev.place;
+        if (time && !open.startTime) open.startTime = time;
+        continue;
+      }
+
+      /**
+       * «ساعت ۹ اومد» بدون محل، وقتی قطعه‌ی جاری محل دارد: این ساعتِ شروعِ
+       * روز است، نه مقصدِ تازه. هرگز قطعه‌ی خالی نمی‌سازیم.
+       */
+      if (!ev.place) {
+        if (open && !open.startTime && time) open.startTime = time;
+        continue;
+      }
+
+      if (open && time) open.endTime = time;
       out.push({
         place: ev.place,
         description: "",
@@ -556,17 +672,51 @@ export function applyEvents(
     appendDescription(last, ev.text);
   }
 
-  return out;
+  return compactSegments(out);
+}
+
+/**
+ * حذف قطعه‌هایی که نه محل دارند نه شرح.
+ * چنین قطعه‌ای در گزارش و اکسل فقط یک سطرِ خالی است. ساعت‌هایش به همسایه
+ * منتقل می‌شود و اگر جایی برای انتقال نبود (مثلاً تنها قطعه‌ی روز)، حذف
+ * نمی‌شود تا ساعتِ شروع/پایانِ روز از دست نرود.
+ */
+export function compactSegments(segments: Segment[]): Segment[] {
+  const out = segments.map((s) => ({ ...s }));
+  const keep: Segment[] = [];
+
+  for (let i = 0; i < out.length; i++) {
+    const seg = out[i];
+    if (seg.place || seg.description.trim()) {
+      keep.push(seg);
+      continue;
+    }
+    const next = out[i + 1];
+    const prev = keep[keep.length - 1];
+    const startMovable = !seg.startTime || (next && !next.startTime);
+    const endMovable = !seg.endTime || (prev && !prev.endTime);
+    if (!startMovable || !endMovable) {
+      keep.push(seg);
+      continue;
+    }
+    if (seg.startTime && next) next.startTime = seg.startTime;
+    if (seg.endTime && prev) prev.endTime = seg.endTime;
+  }
+  return keep;
 }
 
 /**
  * زنجیره‌ی کاملِ روز را از روی همه‌ی پیام‌های آن عضو می‌سازد.
  * همان مسیرِ قطعی است، فقط روی چند پیام پشت‌سرهم.
  */
-export function buildSegments(messages: string[]): Segment[] {
+export type DayMessage = string | { text: string; at?: string | null };
+
+export function buildSegments(messages: DayMessage[]): Segment[] {
   let segments: Segment[] = [];
   for (const msg of messages) {
-    segments = applyEvents(segments, parseMessage(msg).events);
+    const text = typeof msg === "string" ? msg : msg.text;
+    const now = typeof msg === "string" ? null : (msg.at ?? null);
+    segments = applyEvents(segments, parseMessage(text, { now }).events);
   }
   return segments;
 }

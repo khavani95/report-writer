@@ -298,3 +298,63 @@ test("یک روزِ کاملِ ویس‌محور درست زنجیره می‌ش
   assert.equal(segments[1].startTime, "12:00");
   assert.equal(segments[1].endTime, "17:00");
 });
+
+// ── مشکل‌های دورِ دومِ گروه واقعی ──────────────────────
+
+test("ساعتِ بدون فعلِ حرکتی دیگر دور ریخته نمی‌شود", () => {
+  assert.deepEqual(parseMessage("هم ساعت ٩ بانک مرکزی بود").events, [
+    { kind: "arrive", time: "09:00", place: "بانک مرکزی" },
+  ]);
+  assert.deepEqual(parseMessage("۹ صبح شروع کردم").events, [
+    { kind: "arrive", time: "09:00", place: null },
+  ]);
+  assert.deepEqual(parseMessage("ترک کار من و شایان ساعت 19:30").events, [
+    { kind: "leave", time: "19:30" },
+  ]);
+});
+
+test("مقصد روی حرف اضافه و روز هفته تمام می‌شود", () => {
+  assert.deepEqual(parseMessage("رفتم ساختمان برای فلاشینگ بام").events, [
+    { kind: "arrive", time: null, place: "ساختمان" },
+    { kind: "note", text: "برای فلاشینگ بام" },
+  ]);
+  const ev = parseMessage("رفتیم پنجشنبه یه سری وسیله آوردیم").events[0];
+  assert.notEqual((ev as { place: string }).place, "پنجشنبه یه");
+});
+
+test("نامِ لاتینِ ابتدای پیام هم شناخته می‌شود", () => {
+  assert.equal(parseMessage("Shayan امروز ساعت ۹ اومد").personName, "Shayan");
+  assert.equal(parseMessage("شایان امروز ساعت ۹ اومد").personName, "شایان");
+});
+
+test("«اومدم» بدون محل قطعه‌ی خالی نمی‌سازد", () => {
+  const segments = buildSegments([
+    "امروز ساعت ۱۰ اومدم، رفتم همت و از همت رفتم بانک مرکزی.",
+  ]);
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0].place, "همت");
+  assert.equal(segments[0].startTime, "10:00");
+  assert.equal(segments[1].place, "بانک مرکزی");
+  for (const s of segments) assert.ok(s.place, "قطعه‌ی بی‌محل نباید بماند");
+});
+
+test("ساعتِ تکراریِ بی‌محل، زنجیره را شلوغ نمی‌کند", () => {
+  const segments = buildSegments([
+    "ساعت ۱۰:۱۵ اومدم همت",
+    "شایان امروز ساعت ۹ اومد",
+    "ساعت ۹ اومد",
+  ]);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].place, "همت");
+  assert.equal(segments[0].startTime, "10:15");
+});
+
+test("«الان تعطیل کردیم» از ساعتِ خودِ پیام استفاده می‌کند", () => {
+  const segments = buildSegments([
+    { text: "ساعت ۹ اومدم انبار", at: "09:00" },
+    { text: "وسیله آوردیم", at: "12:00" },
+    { text: "من و شایان الان تعطیل کردیم", at: "19:30" },
+  ]);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].endTime, "19:30");
+});
