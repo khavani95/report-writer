@@ -386,6 +386,86 @@ export async function replaceSegments(
   );
 }
 
+// ── کارهای زمان‌بندی‌شده ───────────────────────────────────
+
+/** همه‌ی چت‌هایی که دست‌کم یک عضو دارند */
+export async function listChatIds(): Promise<number[]> {
+  const db = getDb();
+  const rows = await db
+    .selectDistinct({ chatId: members.chatId })
+    .from(members)
+    .where(eq(members.isActive, true));
+  return rows.map((r) => r.chatId);
+}
+
+export interface OpenDayRow {
+  dayId: number;
+  memberName: string;
+  jalaliDate: string;
+  dateLabel: string;
+}
+
+/** روزهای بازِ یک چت در یک تاریخ، همراه با نام عضو */
+export async function openDaysOfChat(
+  chatId: number,
+  jalaliDate: string,
+): Promise<OpenDayRow[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      dayId: memberDays.id,
+      memberName: members.fullName,
+      jalaliDate: memberDays.jalaliDate,
+      dateLabel: memberDays.dateLabel,
+    })
+    .from(memberDays)
+    .innerJoin(members, eq(memberDays.memberId, members.id))
+    .where(
+      and(
+        eq(members.chatId, chatId),
+        eq(memberDays.status, "open"),
+        eq(memberDays.jalaliDate, jalaliDate),
+      ),
+    )
+    .orderBy(members.fullName);
+  return rows;
+}
+
+/** بستنِ دسته‌ایِ چند روز با یک دستور */
+export async function closeDays(dayIds: number[]): Promise<void> {
+  if (!dayIds.length) return;
+  const db = getDb();
+  await db
+    .update(memberDays)
+    .set({ status: "closed", closedAt: new Date() })
+    .where(inArray(memberDays.id, dayIds));
+}
+
+/** قطعه‌های چند روز، یک‌جا */
+export async function segmentsOfDays(
+  dayIds: number[],
+): Promise<Map<number, Segment[]>> {
+  const out = new Map<number, Segment[]>();
+  if (!dayIds.length) return out;
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(activitySegments)
+    .where(inArray(activitySegments.memberDayId, dayIds))
+    .orderBy(asc(activitySegments.seq), asc(activitySegments.id));
+  for (const r of rows) {
+    const list = out.get(r.memberDayId) ?? [];
+    list.push({
+      place: r.place,
+      description: r.description,
+      startTime: r.startTime,
+      endTime: r.endTime,
+    });
+    out.set(r.memberDayId, list);
+  }
+  return out;
+}
+
 // ── داده‌ی ماهانه (برای اکسل) ─────────────────────────────
 
 export interface MonthDayRow {

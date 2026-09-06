@@ -4,5 +4,15 @@
     "src/app/api/telegram/route.ts": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/good-morning",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/close-day",
+      "schedule": "0 20 * * *"
+    }
+  ]
 }

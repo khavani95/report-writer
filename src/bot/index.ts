@@ -427,14 +427,43 @@ async function ingestReport(
     rawText: text,
   });
 
-  const heard = meta.transcript ? `${MSG.heard(meta.transcript)}\n` : "";
-  await ctx.reply(
-    heard +
-      formatAck(segments, target.onBehalf ? target.member.fullName : undefined),
-    meta.telegramMessageId
-      ? { reply_parameters: { message_id: meta.telegramMessageId } }
-      : undefined,
-  );
+  /**
+   * ⚠️ تأییدیه عمداً «واکنش» است نه پیام.
+   *
+   * در گروهِ واقعی هر پیامِ گزارش یک پاسخِ بات می‌گرفت و چت غیرقابل‌خواندن
+   * می‌شد. واکنش نه پیام تازه‌ای می‌سازد نه اعلان می‌فرستد، ولی فرستنده
+   * می‌بیند که ثبت شده. پیام فقط جایی می‌ماند که واقعاً حرفی برای گفتن
+   * هست: گزارش به نام دیگری، یا متنِ شنیده‌شده‌ی ویس که باید بازبینی شود.
+   */
+  const notes: string[] = [];
+  if (meta.transcript) notes.push(MSG.heard(meta.transcript));
+  if (target.onBehalf) {
+    notes.push(
+      formatAck(segments, target.member.fullName),
+    );
+  }
+
+  if (notes.length) {
+    await ctx.reply(
+      notes.join("\n"),
+      meta.telegramMessageId
+        ? { reply_parameters: { message_id: meta.telegramMessageId } }
+        : undefined,
+    );
+    return;
+  }
+
+  // واکنش ممکن است در بعضی گروه‌ها اجازه نداشته باشد؛ آن‌وقت به پیام
+  // برمی‌گردیم تا تأییدی که کاربر لازم دارد از دست نرود.
+  try {
+    await ctx.react("👌");
+  } catch {
+    await ctx.reply(formatAck(segments), {
+      reply_parameters: meta.telegramMessageId
+        ? { message_id: meta.telegramMessageId }
+        : undefined,
+    });
+  }
 }
 
 /**
