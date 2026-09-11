@@ -28,6 +28,11 @@ export type SegmentEvent =
   | { kind: "leave"; time: string | null }
   /** «تا ۵ اونجا بودم» — فقط پایانِ قطعه‌ی جاری */
   | { kind: "until"; time: string }
+  /**
+   * بندی که فقط ساعت است («هفت و نیم صبح» در خط دوم پیام).
+   * به قطعه‌ی جاری می‌چسبد: اگر ساعت شروع ندارد شروع، وگرنه پایان.
+   */
+  | { kind: "at"; time: string }
   /** شرح کار، بدون ساعت و بدون مقصد — به قطعه‌ی جاری می‌چسبد */
   | { kind: "note"; text: string };
 
@@ -80,7 +85,14 @@ const PAST_STEMS = [
 const VERB_SUFFIXES = ["", "م", "ی", "یم", "ید", "ن", "ند", "ه", "ه‌ام", "ه‌اند"];
 
 /** واژه‌هایی که ابتدای مقصد می‌آیند و بخشی از نام محل نیستند */
-const PLACE_PREFIXES = ["به", "در", "سمت", "طرف", "سراغ", "سوی", "تو", "توی"];
+const PLACE_PREFIXES = [
+  "به", "در", "سمت", "طرف", "سراغ", "سوی", "تو", "توی",
+  // «رفتم از ایران ویبره دستگاه گرفتم» → محل «ایران ویبره» است نه «از ایران»
+  "از",
+];
+
+/** «رفتم خونه» یعنی پایانِ کار، نه مقصدِ تازه */
+const HOME_WORDS = ["خونه", "خانه", "منزل"];
 
 /**
  * واژه‌هایی که مقصد را تمام می‌کنند.
@@ -95,10 +107,17 @@ const PLACE_STOP = [
 ];
 
 /** نشانه‌های «شروعِ کار» بدون فعل حرکتی: «۹ صبح شروع کردم» */
-const START_WORDS = ["شروع", "آغاز", "اغاز", "استارت"];
+const START_WORDS = ["شروع", "آغاز", "اغاز", "استارت", "ورود"];
 
 /** نشانه‌های «پایانِ کار» بدون فعل حرکتی: «ترک کار ساعت ۱۹:۳۰» */
-const END_WORDS = ["ترک", "تعطیل", "تمام", "تموم", "پایان", "خاتمه", "اتمام"];
+const END_WORDS = [
+  "ترک", "تعطیل", "تمام", "تموم", "پایان", "خاتمه", "اتمام", "خروج",
+];
+
+/** فعل‌های «بودن» — نشانه‌ی حضور در جایی، نه انجامِ کاری */
+const BEING_VERBS = [
+  "بود", "بودم", "بودیم", "بودن", "بودند", "هست", "هستم", "هستیم",
+];
 
 /** «الان تعطیل کردیم» — ساعتِ گفته‌نشده یعنی همین حالا */
 const NOW_WORDS = ["الان", "الآن", "هماکنون", "همینالان", "تازه"];
@@ -311,12 +330,22 @@ function findTime(tokens: string[]): TimeHit | null {
   for (let i = 0; i < tokens.length; i++) {
     const num = readNumber(tokens, i);
     if (!num) continue;
-    const next = normalizeToken(tokens[i + num.consumed] ?? "");
+    let end = i + num.consumed;
+
+    // «هفت و نیم صبح» — کسر هم پیش از واژه‌ی صبح/عصر می‌آید
+    const mins = readMinutes(tokens, end);
+    const digits =
+      mins && !num.text.includes(":")
+        ? `${num.text}:${mins.text.padStart(2, "0")}`
+        : num.text;
+    if (mins && !num.text.includes(":")) end += mins.consumed;
+
+    const next = normalizeToken(tokens[end] ?? "");
     if (!/^(صبح|عصر|ظهر|شب|بامداد|غروب|بعدازظهر)$/.test(next)) continue;
     return {
-      expr: `${num.text} ${tokens[i + num.consumed]}`,
+      expr: `${digits} ${tokens[end]}`,
       start: i,
-      end: i + num.consumed + 1,
+      end: end + 1,
       until: false,
     };
   }
@@ -357,6 +386,27 @@ function extractPlace(tokens: string[], from: number): string | null {
   return place || null;
 }
 
+/** واژه‌های محل را از فهرست بند حذف می‌کند تا در شرح تکرار نشوند */
+function dropPlace(tokens: string[], place: string): string[] {
+  const words = place.split(/\s+/).filter(Boolean);
+  const first = tokens.findIndex((t) => normalizeToken(t) === normalizeToken(words[0]));
+  if (first < 0) return tokens;
+  return [...tokens.slice(0, first), ...tokens.slice(first + words.length)];
+}
+
+/** جای نخستین واژه‌ی این فهرست در بند (‎-۱ اگر نبود) */
+function indexOfWord(tokens: string[], words: string[]): number {
+  return tokens.findIndex((t) =>
+    words.some((w) => normalizeToken(t).startsWith(w)),
+  );
+}
+
+/** آیا این مقصد «خانه» است؟ (فقط تک‌واژه؛ «خانه گستر» یک شرکت است) */
+function isHome(place: string): boolean {
+  const words = place.split(/\s+/).filter(Boolean);
+  return words.length === 1 && HOME_WORDS.includes(normalizeToken(words[0]));
+}
+
 /** پاک‌سازی متنِ شرح */
 function cleanNote(tokens: string[]): string {
   const words = [...tokens];
@@ -380,7 +430,10 @@ function isMeaningful(text: string): boolean {
 }
 
 /** تحلیل یک بند به رویدادها */
-function classifyClause(clause: string): SegmentEvent[] {
+function classifyClause(
+  clause: string,
+  hint: "entry" | "exit" = "entry",
+): SegmentEvent[] {
   const tokens = clause.split(/\s+/).filter(Boolean);
   if (!tokens.length) return [];
 
@@ -402,9 +455,23 @@ function classifyClause(clause: string): SegmentEvent[] {
   // بندِ «تا ۵ …» فقط پایانِ قطعه‌ی جاری را می‌گوید
   if (time?.until && verbKind !== "arrive" && verbKind !== "move") {
     const events: SegmentEvent[] = [];
+    /**
+     * «تا ۴ همت بودم» → محل «همت» است. ولی «تا ۵ اونجا لوله‌کشی مخزن رو
+     * انجام دادن» شرحِ کار است نه محل. تفاوت در فعلِ بند است: فعلِ «بودن»
+     * یعنی حضور در جایی، هر فعلِ دیگری یعنی انجامِ کاری.
+     * محل پیش از «تا» می‌آید تا به قطعه‌ی جاری بنشیند، وگرنه پس از
+     * بسته‌شدنِ قطعه قطعه‌ی تازه‌ای می‌ساخت.
+     */
+    const onlyBeing = rest
+      .filter((t) => isVerbToken(t))
+      .every((t) => BEING_VERBS.includes(normalizeToken(t)));
+    const place = onlyBeing ? extractPlace(rest, 0) : null;
+    if (place && !isHome(place)) {
+      events.push({ kind: "arrive", time: null, place });
+    }
     const t = parseSingleTime(time.expr, "exit");
     if (t) events.push({ kind: "until", time: t });
-    const note = cleanNote(rest);
+    const note = cleanNote(place ? dropPlace(rest, place) : rest);
     if (isMeaningful(note)) events.push({ kind: "note", text: note });
     return events;
   }
@@ -418,27 +485,40 @@ function classifyClause(clause: string): SegmentEvent[] {
     const has = (words: string[]) =>
       rest.some((t) => words.some((w) => normalizeToken(t).startsWith(w)));
 
+    const place = extractPlace(rest, 0);
+
     if (has(END_WORDS)) {
       const t = parseSingleTime(time.expr, "exit");
       return t ? [{ kind: "leave", time: t }] : [];
     }
-    const t = parseSingleTime(time.expr, "entry");
+    const t = parseSingleTime(time.expr, has(START_WORDS) ? "entry" : hint);
+    if (!t) return [];
+
+    // «ورود ساعت ۱۰» و «ورود به پروژه شهرداری» — «ورود» نامِ محل نیست،
+    // پس مقصد از پس از همان واژه خوانده می‌شود.
     if (has(START_WORDS)) {
-      return t ? [{ kind: "arrive", time: t, place: null }] : [];
+      const after = extractPlace(rest, indexOfWord(rest, START_WORDS) + 1);
+      return [
+        { kind: "arrive", time: t, place: after && !isHome(after) ? after : null },
+      ];
     }
-    const place = extractPlace(rest, 0);
-    if (place && t) {
+    if (place && !isHome(place)) {
       const events: SegmentEvent[] = [{ kind: "arrive", time: t, place }];
-      const tail = cleanNote(rest.slice(rest.indexOf(place.split(" ")[0]) + place.split(" ").length));
+      const tail = cleanNote(dropPlace(rest, place));
       if (isMeaningful(tail)) events.push({ kind: "note", text: tail });
       return events;
     }
-    // فقط ساعت، بدون هیچ نشانه‌ی دیگر: حدس نمی‌زنیم
+    // فقط ساعت: به قطعه‌ی جاری می‌چسبد («هفت و نیم صبح» در خط دوم)
+    return [{ kind: "at", time: t }];
   }
 
   if (verbKind) {
-    const place = verbKind === "leave" ? null : extractPlace(rest, verbIdx + 1);
-    const arriving = verbKind === "arrive" || (verbKind === "move" && !!place);
+    const found = verbKind === "leave" ? null : extractPlace(rest, verbIdx + 1);
+    // «ساعت ۵ رفتم خونه» یعنی پایانِ کار، نه مقصدِ تازه
+    const goingHome = found !== null && isHome(found);
+    const place = goingHome ? null : found;
+    const arriving =
+      !goingHome && (verbKind === "arrive" || (verbKind === "move" && !!place));
     const t = time
       ? parseSingleTime(time.expr, arriving ? "entry" : "exit")
       : null;
@@ -449,13 +529,32 @@ function classifyClause(clause: string): SegmentEvent[] {
         : { kind: "leave", time: t },
     ];
 
-    // اگر بعد از مقصد هنوز جمله‌ای مانده، شرحِ کار است
-    const placeWords = place ? place.split(/\s+/).length : 0;
-    const tail = rest.slice(verbIdx + 1 + placeWords);
+    // اگر بعد از مقصد هنوز جمله‌ای مانده، شرحِ کار است.
+    // مقصدِ خانه هم از شرح حذف می‌شود؛ «خونه» اطلاعاتی ندارد.
+    const skip = found ? found.split(/\s+/).length : 0;
+    const tail = rest.slice(verbIdx + 1 + skip);
     // «رفتم ساختمان برای فلاشینگ بام» → شرح «برای فلاشینگ بام» نباید گم شود
     const note = cleanNote(tail);
     if (isMeaningful(note)) events.push({ kind: "note", text: note });
     return events;
+  }
+
+  /**
+   * «ورود به پروژه شهرداری» یا «خروج از پروژه شهرداری» بدون ساعت.
+   * ساعتش معمولاً در خط بعدی می‌آید؛ اگر اینجا رویداد نسازیم، آن ساعت هم
+   * جایی برای نشستن ندارد و کل پیام به شرح تبدیل می‌شود.
+   */
+  if (!time) {
+    const words = rest.map((t) => normalizeToken(t));
+    const isEnd = words.some((w) => END_WORDS.some((e) => w.startsWith(e)));
+    const isStart = words.some((w) => START_WORDS.some((e) => w.startsWith(e)));
+    if (isEnd) return [{ kind: "leave", time: null }];
+    if (isStart) {
+      const after = extractPlace(rest, indexOfWord(rest, START_WORDS) + 1);
+      return [
+        { kind: "arrive", time: null, place: after && !isHome(after) ? after : null },
+      ];
+    }
   }
 
   // بدون فعلِ حرکتی: یا فقط ساعت است یا فقط شرحِ کار
@@ -521,7 +620,12 @@ export function parseMessage(
   const { name, rest } = splitLeadingName(text);
   const events: SegmentEvent[] = [];
   for (const clause of splitClauses(rest)) {
-    events.push(...classifyClause(clause));
+    // ساعتِ تنها را با توجه به رویدادهای پیشِ خودش تفسیر می‌کنیم:
+    // بعد از «خروج»، «ساعت ۵» یعنی ۱۷:۰۰ نه ۰۵:۰۰.
+    const hint = events.some((e) => e.kind === "leave" || e.kind === "until")
+      ? "exit"
+      : "entry";
+    events.push(...classifyClause(clause, hint));
   }
   const merged = mergeNotes(events);
 
@@ -653,6 +757,24 @@ export function applyEvents(
         startTime: time,
         endTime: null,
       });
+      continue;
+    }
+
+    if (ev.kind === "at") {
+      if (!last) {
+        out.push({
+          place: null,
+          description: "",
+          startTime: ev.time,
+          endTime: null,
+        });
+        continue;
+      }
+      if (!last.startTime) {
+        last.startTime = forwardInDay(ev.time, lastKnownTime(out.slice(0, -1)));
+      } else if (!last.endTime) {
+        last.endTime = forwardInDay(ev.time, last.startTime);
+      }
       continue;
     }
 

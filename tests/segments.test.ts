@@ -358,3 +358,57 @@ test("«الان تعطیل کردیم» از ساعتِ خودِ پیام اس�
   assert.equal(segments.length, 1);
   assert.equal(segments[0].endTime, "19:30");
 });
+
+// ── مشکل‌های دورِ سومِ گروه واقعی ──────────────────────
+
+test("«از» پیش از نام محل، بخشی از محل نیست", () => {
+  const ev = parseMessage("ساعت ۱۰:۱۵ رفتم از ایران ویبره دستگاه رو گرفتم")
+    .events[0] as { place: string };
+  assert.equal(ev.place, "ایران ویبره");
+});
+
+test("«رفتم خونه» یعنی پایان کار، نه مقصد تازه", () => {
+  assert.deepEqual(parseMessage("ساعت ۵ رفتم خونه").events, [
+    { kind: "leave", time: "17:00" },
+  ]);
+  // «خانه گستر» نام شرکت است، نه خانه
+  const ev = parseMessage("رفتم خانه گستر").events[0] as { place: string };
+  assert.equal(ev.place, "خانه گستر");
+});
+
+test("«ورود» و «خروج» رویدادند، نه نام محل", () => {
+  assert.deepEqual(parseMessage("من ورود ساعت ۱۰\nخروج ساعت ۱۸").events, [
+    { kind: "arrive", time: "10:00", place: null },
+    { kind: "leave", time: "18:00" },
+  ]);
+  assert.deepEqual(parseMessage("ورود ساعت ۹ همت").events, [
+    { kind: "arrive", time: "09:00", place: "همت" },
+  ]);
+});
+
+test("ساعتی که در خط بعدی می‌آید به همان قطعه می‌چسبد", () => {
+  const segments = buildSegments([
+    "ورود به پروژه خاکبرداری شهرداری\nهفت و نیم صبح",
+    "خروج از پروژه شهرداری\nساعت بیست",
+  ]);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].place, "پروژه خاکبرداری شهرداری");
+  assert.equal(segments[0].startTime, "07:30");
+  assert.equal(segments[0].endTime, "20:00");
+});
+
+test("«از ساعت ۱۲ تا ۴ همت بودم» هر سه را می‌گیرد", () => {
+  const segments = buildSegments(["من از ساعت ۱۲ تا ۴ همت بودم"]);
+  assert.equal(segments.length, 1);
+  assert.equal(segments[0].place, "همت");
+  assert.equal(segments[0].startTime, "12:00");
+  assert.equal(segments[0].endTime, "16:00");
+});
+
+test("«تا ۵ اونجا کار کردیم» شرح است نه محل", () => {
+  const events = parseMessage(
+    "ایدین امروز ساعت 7 رفت باغ موزه تا 5 اونجا لوله‌کشی مخزن رو انجام دادن",
+  ).events;
+  assert.equal(events.filter((e) => e.kind === "arrive").length, 1);
+  assert.ok(events.some((e) => e.kind === "note"));
+});

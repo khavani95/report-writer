@@ -286,6 +286,12 @@ interface MessageMeta {
   telegramFileId?: string;
   /** متنِ پیاده‌شده‌ی ویس — به عضو نشان داده می‌شود تا بدترین حالت را ببیند */
   transcript?: string;
+  /**
+   * تأیید حتماً پیام باشد نه واکنش.
+   * برای گزارشِ معلق لازم است: آن پیام مربوط به چند پیام قبل‌تر است و
+   * واکنش روی پیامِ فعلی (که جوابِ «سمت شما چیست؟» بوده) گمراه‌کننده است.
+   */
+  announce?: boolean;
 }
 
 /** «محمد خوانی — مدیرعامل» → ["محمد خوانی", "مدیرعامل"] */
@@ -331,20 +337,22 @@ async function onMessage(
       const pending = state.pendingText;
       await clearState(chatId, userId);
       if (pending) {
-        await ctx.reply(MSG.pendingSaved);
         await ingestReport(ctx, { ...member, role: text.trim() }, pending, {
           kind: "text",
+          announce: true,
         });
       }
     }
     return;
   }
 
-  const { events } = parseMessage(text);
-  // در گروه هر پیامی گزارش نیست؛ «سلام» نباید روز باز کند یا نام بپرسد
-  if (!isReportable(events)) return;
-
   const sender = await senderMember(ctx);
+
+  /**
+   * فرستنده‌ی ناشناس: هر پیامی — حتی «سلام» یا نوشتنِ نامِ خودش — نام را
+   * می‌پرسد. پیش از این فقط پیامِ «گزارش‌مانند» این کار را می‌کرد، و عضوی
+   * که نامش را نوشته بود هیچ جوابی نگرفت و پرسید «چرا جواب نمیده».
+   */
   if (!sender) {
     const suggestion = displayName(ctx.from);
     const unlinked = await listUnlinkedMembers(chatId);
@@ -358,6 +366,8 @@ async function onMessage(
     return;
   }
 
+  // عضوِ شناخته‌شده: در گروه هر پیامی گزارش نیست
+  if (!isReportable(parseMessage(text).events)) return;
   await ingestReport(ctx, sender, text, meta);
 }
 
@@ -435,13 +445,14 @@ async function ingestReport(
    * می‌بیند که ثبت شده. پیام فقط جایی می‌ماند که واقعاً حرفی برای گفتن
    * هست: گزارش به نام دیگری، یا متنِ شنیده‌شده‌ی ویس که باید بازبینی شود.
    */
+  // پیامِ غیرگزارشی چیزی به زنجیره اضافه نکرده؛ تأییدی هم لازم ندارد
+  if (!segments.length) return;
+
+  const who = target.onBehalf ? target.member.fullName : undefined;
   const notes: string[] = [];
+  if (meta.announce) notes.push(MSG.pendingSaved);
   if (meta.transcript) notes.push(MSG.heard(meta.transcript));
-  if (target.onBehalf) {
-    notes.push(
-      formatAck(segments, target.member.fullName),
-    );
-  }
+  if (meta.announce || target.onBehalf) notes.push(formatAck(segments, who));
 
   if (notes.length) {
     await ctx.reply(
